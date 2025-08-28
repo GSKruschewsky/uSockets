@@ -158,6 +158,9 @@ void us_internal_ssl_socket_context_on_server_name(struct us_internal_ssl_socket
 void *us_internal_ssl_socket_get_sni_userdata(struct us_internal_ssl_socket_t *s);
 void *us_internal_ssl_socket_context_find_server_name_userdata(struct us_internal_ssl_socket_context_t *context, const char *hostname_pattern);
 
+/* Client side SNI */
+void us_internal_ssl_socket_context_set_host_name(struct us_internal_ssl_socket_context_t *context, const char *hostname);
+
 void *us_internal_ssl_socket_get_native_handle(struct us_internal_ssl_socket_t *s);
 void *us_internal_ssl_socket_context_get_native_handle(struct us_internal_ssl_socket_context_t *context);
 

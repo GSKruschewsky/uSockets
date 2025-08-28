@@ -174,6 +174,15 @@ void us_socket_context_remove_server_name(int ssl, struct us_socket_context_t *c
 #endif
 }
 
+/* Add client side SNI context */
+void us_socket_context_set_host_name (int ssl, struct us_socket_context_t *context, const char *hostname) {
+#ifndef LIBUS_NO_SSL
+    if (ssl) {
+        us_internal_ssl_socket_context_set_host_name((struct us_internal_ssl_socket_context_t *) context, hostname);
+    }
+#endif
+}
+
 /* I don't like this one - maybe rename it to on_missing_server_name? */
 
 /* Called when SNI matching fails - not if a match could be made.

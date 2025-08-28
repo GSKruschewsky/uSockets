@@ -77,6 +77,9 @@ struct us_internal_ssl_socket_context_t {
 
     /* Pointer to sni tree, created when the context is created and freed likewise when freed */
     void *sni;
+
+    /* Used to set client-side SNI */
+    char *hostname;
 };
 
 // same here, should or shouldn't it contain s?
@@ -163,6 +166,7 @@ struct us_internal_ssl_socket_t *ssl_on_open(struct us_internal_ssl_socket_t *s,
     BIO_up_ref(loop_ssl_data->shared_wbio);
 
     if (is_client) {
+        SSL_set_tlsext_host_name(s->ssl, context->hostname);
         SSL_set_connect_state(s->ssl);
     } else {
         SSL_set_accept_state(s->ssl);
@@ -584,6 +588,11 @@ void us_internal_ssl_socket_context_remove_server_name(struct us_internal_ssl_so
     /* The same thing must happen for sni_free, that's why we have a callback */
     SSL_CTX *sni_node_ssl_context = (SSL_CTX *) sni_remove(context->sni, hostname_pattern);
     free_ssl_context(sni_node_ssl_context);
+}
+
+/* Set client-side SNI */
+void us_internal_ssl_socket_context_set_host_name(struct us_internal_ssl_socket_context_t *context, const char *hostname) {
+    context->hostname = (char *) hostname;
 }
 
 /* Returns NULL or SSL_CTX. May call missing server name callback */

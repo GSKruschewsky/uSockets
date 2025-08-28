@@ -147,6 +147,9 @@ void us_socket_context_on_server_name(int ssl, struct us_socket_context_t *conte
 void *us_socket_server_name_userdata(int ssl, struct us_socket_t *s);
 void *us_socket_context_find_server_name_userdata(int ssl, struct us_socket_context_t *context, const char *hostname_pattern);
 
+/* Client side SNI */
+void us_socket_context_set_host_name (int ssl, struct us_socket_context_t *context, const char *hostname);
+
 /* Returns the underlying SSL native handle, such as SSL_CTX or nullptr */
 void *us_socket_context_get_native_handle(int ssl, struct us_socket_context_t *context);
 
