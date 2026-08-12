@@ -244,8 +244,13 @@ void us_internal_dispatch_ready_poll(struct us_poll_t *p, int error, int events)
 
                 /* It is perfectly possible to come here with an error */
                 if (error) {
-                    /* Emit error, close without emitting on_close */
-                    s->context->on_connect_error(s, 0);
+                    /* Emit error, close without emitting on_close.
+                     * The handler is optional (null unless registered) and the real
+                     * errno is fetched from the socket, as epoll/kqueue only tell
+                     * us that the connect failed, not why. */
+                    if (s->context->on_connect_error) {
+                        s->context->on_connect_error(s, bsd_socket_error(us_poll_fd(p)));
+                    }
                     us_socket_close_connecting(0, s);
                 } else {
                     /* All sockets poll for readable */

@@ -237,6 +237,9 @@ struct us_socket_context_t *us_create_socket_context(int ssl, struct us_loop_t *
     /* Some new events must be set to null for backwards compatibility */
     context->on_pre_open = 0;
 
+    /* Only set by contexts that connect; a connect failure must not call through garbage */
+    context->on_connect_error = 0;
+
     us_internal_loop_link(loop, context);
 
     /* If we are called from within SSL code, SSL code will make further changes to us */
