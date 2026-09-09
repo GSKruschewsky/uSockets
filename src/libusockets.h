@@ -153,6 +153,15 @@ void us_socket_context_set_host_name (int ssl, struct us_socket_context_t *conte
 /* Returns the underlying SSL native handle, such as SSL_CTX or nullptr */
 void *us_socket_context_get_native_handle(int ssl, struct us_socket_context_t *context);
 
+/* Opt-in kernel receive timestamps for the sockets connected through this context (client side).
+ * On Linux every received segment is stamped by the kernel when it enters the network stack
+ * (SO_TIMESTAMPING, software rx timestamp) and the loop exposes the stamp of the data it is
+ * dispatching through us_loop_last_rx_timestamp. The flag is copied onto each socket at connect
+ * time, so it survives adoption into another context (e.g. an HTTP -> WebSocket upgrade).
+ * Off by default: the receive path is then exactly the plain recv() one. */
+void us_socket_context_set_rx_timestamps(int ssl, struct us_socket_context_t *context, int enabled);
+int us_socket_context_rx_timestamps(int ssl, struct us_socket_context_t *context);
+
 /* A socket context holds shared callbacks and user data extension for associated sockets */
 struct us_socket_context_t *us_create_socket_context(int ssl, struct us_loop_t *loop,
     int ext_size, struct us_socket_context_options_t options);
@@ -240,6 +249,16 @@ void us_loop_free(struct us_loop_t *loop);
 
 /* Returns the loop user data extension */
 void *us_loop_ext(struct us_loop_t *loop);
+
+/* Receive timestamp (ns since the Unix epoch, CLOCK_REALTIME) of the data the loop is currently
+ * dispatching from a socket with rx timestamps enabled (see us_socket_context_set_rx_timestamps).
+ * Only meaningful inside the on_data callback chain of that read. *from_kernel (may be NULL) is
+ * set to 1 when the kernel stamped the segment, 0 when it is a userspace fallback taken right
+ * after the read. */
+unsigned long long us_loop_last_rx_timestamp(struct us_loop_t *loop, int *from_kernel);
+
+/* CLOCK_REALTIME now, in nanoseconds since the Unix epoch (the clock the rx timestamps use) */
+unsigned long long us_realtime_ns();
 
 /* Blocks the calling thread and drives the event loop until no more non-fallthrough polls are scheduled */
 void us_loop_run(struct us_loop_t *loop);

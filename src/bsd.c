@@ -24,11 +24,13 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 #ifndef _WIN32
 //#define _GNU_SOURCE
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/uio.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <netdb.h>
@@ -36,6 +38,10 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#ifdef __linux__
+/* SOF_TIMESTAMPING_* flags for the opt-in kernel receive timestamps */
+#include <linux/net_tstamp.h>
+#endif
 #endif
 
 /* Internal structure of packet buffer */
@@ -414,6 +420,80 @@ LIBUS_SOCKET_DESCRIPTOR bsd_accept_socket(LIBUS_SOCKET_DESCRIPTOR fd, struct bsd
 
 int bsd_recv(LIBUS_SOCKET_DESCRIPTOR fd, void *buf, int length, int flags) {
     return recv(fd, buf, length, flags);
+}
+
+unsigned long long bsd_realtime_ns() {
+    struct timespec ts;
+#ifdef _WIN32
+    timespec_get(&ts, TIME_UTC);
+#else
+    clock_gettime(CLOCK_REALTIME, &ts);
+#endif
+    return (unsigned long long) ts.tv_sec * 1000000000ull + (unsigned long long) ts.tv_nsec;
+}
+
+/* Asks the kernel to stamp every received segment when it enters the network stack (software
+ * receive timestamp) and to hand the stamp out as recvmsg ancillary data. Linux only; returns
+ * 0 on success and -1 where unsupported, in which case bsd_recv_ts falls back to userspace. */
+int bsd_socket_enable_rx_timestamps(LIBUS_SOCKET_DESCRIPTOR fd) {
+#if defined(__linux__) && defined(SO_TIMESTAMPING)
+    int flags = SOF_TIMESTAMPING_RX_SOFTWARE | SOF_TIMESTAMPING_SOFTWARE;
+    return setsockopt(fd, SOL_SOCKET, SO_TIMESTAMPING, &flags, sizeof(flags));
+#else
+    (void) fd;
+    return -1;
+#endif
+}
+
+/* Same contract as bsd_recv, plus the receive timestamp of the returned data in ns since the
+ * Unix epoch (CLOCK_REALTIME). *from_kernel is 1 when the kernel stamped it - on a stream
+ * socket the stamp belongs to the last segment consumed by this call - and 0 when it is the
+ * userspace fallback taken right after the read (no ancillary data: old kernel, other OS). */
+int bsd_recv_ts(LIBUS_SOCKET_DESCRIPTOR fd, void *buf, int length, int flags, unsigned long long *ns, int *from_kernel) {
+#if defined(__linux__) && defined(SO_TIMESTAMPING)
+    struct iovec iov;
+    iov.iov_base = buf;
+    iov.iov_len = (size_t) length;
+
+    /* SCM_TIMESTAMPING carries struct scm_timestamping: 3 x struct timespec */
+    union {
+        struct cmsghdr align;
+        char buf[CMSG_SPACE(3 * sizeof(struct timespec))];
+    } control;
+
+    struct msghdr msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control.buf;
+    msg.msg_controllen = sizeof(control.buf);
+
+    int ret = (int) recvmsg(fd, &msg, flags);
+    *from_kernel = 0;
+    if (ret > 0) {
+        for (struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg); cmsg; cmsg = CMSG_NXTHDR(&msg, cmsg)) {
+            if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_TIMESTAMPING) {
+                struct timespec ts[3];
+                memcpy(ts, CMSG_DATA(cmsg), sizeof(ts));
+                /* ts[0] is the software stamp; ts[2] would be a hardware one, not requested */
+                if (ts[0].tv_sec || ts[0].tv_nsec) {
+                    *ns = (unsigned long long) ts[0].tv_sec * 1000000000ull + (unsigned long long) ts[0].tv_nsec;
+                    *from_kernel = 1;
+                }
+                break;
+            }
+        }
+    }
+    if (!*from_kernel) {
+        *ns = bsd_realtime_ns();
+    }
+    return ret;
+#else
+    int ret = recv(fd, buf, length, flags);
+    *ns = bsd_realtime_ns();
+    *from_kernel = 0;
+    return ret;
+#endif
 }
 
 #if !defined(_WIN32)

@@ -90,6 +90,12 @@ int bsd_addr_get_port(struct bsd_addr_t *addr);
 LIBUS_SOCKET_DESCRIPTOR bsd_accept_socket(LIBUS_SOCKET_DESCRIPTOR fd, struct bsd_addr_t *addr);
 
 int bsd_recv(LIBUS_SOCKET_DESCRIPTOR fd, void *buf, int length, int flags);
+/* Opt-in kernel receive timestamps (Linux SO_TIMESTAMPING): enable on a socket, then read
+ * through bsd_recv_ts, which reports the stamp of the returned data next to the byte count */
+int bsd_socket_enable_rx_timestamps(LIBUS_SOCKET_DESCRIPTOR fd);
+int bsd_recv_ts(LIBUS_SOCKET_DESCRIPTOR fd, void *buf, int length, int flags, unsigned long long *ns, int *from_kernel);
+/* CLOCK_REALTIME in nanoseconds since the Unix epoch */
+unsigned long long bsd_realtime_ns();
 int bsd_send(LIBUS_SOCKET_DESCRIPTOR fd, const char *buf, int length, int msg_more);
 int bsd_write2(LIBUS_SOCKET_DESCRIPTOR fd, const char *header, int header_length, const char *payload, int payload_length);
 int bsd_would_block();

@@ -97,6 +97,7 @@ struct us_socket_t {
     unsigned char timeout; // 1 byte
     unsigned char long_timeout; // 1 byte
     unsigned short low_prio_state; /* 0 = not in low-prio queue, 1 = is in low-prio queue, 2 = was in low-prio queue in this iteration */
+    unsigned char rx_timestamps; /* 1 = reads go through bsd_recv_ts (kernel receive timestamps), set at connect from the context */
     struct us_socket_context_t *context;
     struct us_socket_t *prev, *next;
 };
@@ -141,6 +142,9 @@ struct us_socket_context_t {
     struct us_socket_t *(*on_end)(struct us_socket_t *);
     struct us_socket_t *(*on_connect_error)(struct us_socket_t *, int code);
     int (*is_low_prio)(struct us_socket_t *);
+
+    /* Opt-in: sockets connected through this context get kernel receive timestamps */
+    int rx_timestamps;
 };
 
 #endif

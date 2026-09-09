@@ -239,6 +239,7 @@ struct us_socket_context_t *us_create_socket_context(int ssl, struct us_loop_t *
 
     /* Only set by contexts that connect; a connect failure must not call through garbage */
     context->on_connect_error = 0;
+    context->rx_timestamps = 0;
 
     us_internal_loop_link(loop, context);
 
@@ -285,6 +286,7 @@ struct us_listen_socket_t *us_socket_context_listen(int ssl, struct us_socket_co
     ls->s.timeout = 255;
     ls->s.long_timeout = 255;
     ls->s.low_prio_state = 0;
+    ls->s.rx_timestamps = 0;
     ls->s.next = 0;
     us_internal_socket_context_link_listen_socket(context, ls);
 
@@ -316,12 +318,25 @@ struct us_listen_socket_t *us_socket_context_listen_unix(int ssl, struct us_sock
     ls->s.timeout = 255;
     ls->s.long_timeout = 255;
     ls->s.low_prio_state = 0;
+    ls->s.rx_timestamps = 0;
     ls->s.next = 0;
     us_internal_socket_context_link_listen_socket(context, ls);
 
     ls->socket_ext_size = socket_ext_size;
 
     return ls;
+}
+
+void us_socket_context_set_rx_timestamps(int ssl, struct us_socket_context_t *context, int enabled) {
+    /* An SSL context embeds the TCP context as its first member, so the same field serves both
+     * and the SSL connect path (which connects through that embedded context) sees it */
+    (void) ssl;
+    context->rx_timestamps = enabled ? 1 : 0;
+}
+
+int us_socket_context_rx_timestamps(int ssl, struct us_socket_context_t *context) {
+    (void) ssl;
+    return context->rx_timestamps;
 }
 
 struct us_socket_t *us_socket_context_connect(int ssl, struct us_socket_context_t *context, const char *host, int port, const char *source_host, int options, int socket_ext_size) {
@@ -336,6 +351,12 @@ struct us_socket_t *us_socket_context_connect(int ssl, struct us_socket_context_
         return 0;
     }
 
+    /* Opt-in kernel receive timestamps: enabled per socket at connect, and the flag rides on
+     * the socket itself so it survives adoption into another context */
+    if (context->rx_timestamps) {
+        bsd_socket_enable_rx_timestamps(connect_socket_fd);
+    }
+
     /* Connect sockets are semi-sockets just like listen sockets */
     struct us_poll_t *p = us_create_poll(context->loop, 0, sizeof(struct us_socket_t) - sizeof(struct us_poll_t) + socket_ext_size);
     us_poll_init(p, connect_socket_fd, POLL_TYPE_SEMI_SOCKET);
@@ -348,6 +369,7 @@ struct us_socket_t *us_socket_context_connect(int ssl, struct us_socket_context_
     connect_socket->timeout = 255;
     connect_socket->long_timeout = 255;
     connect_socket->low_prio_state = 0;
+    connect_socket->rx_timestamps = context->rx_timestamps ? 1 : 0;
     us_internal_socket_context_link_socket(context, connect_socket);
 
     return connect_socket;
@@ -377,6 +399,7 @@ struct us_socket_t *us_socket_context_connect_unix(int ssl, struct us_socket_con
     connect_socket->timeout = 255;
     connect_socket->long_timeout = 255;
     connect_socket->low_prio_state = 0;
+    connect_socket->rx_timestamps = 0; /* Kernel rx timestamps are only requested for TCP connects */
     us_internal_socket_context_link_socket(context, connect_socket);
 
     return connect_socket;

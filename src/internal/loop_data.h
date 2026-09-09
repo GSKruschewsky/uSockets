@@ -33,6 +33,11 @@ struct us_internal_loop_data_t {
     int low_prio_budget;
     /* We do not care if this flips or not, it doesn't matter */
     long long iteration_nr;
+    /* Receive timestamp of the data currently being dispatched from a socket with
+     * rx_timestamps set (ns since the Unix epoch, CLOCK_REALTIME), and whether the
+     * kernel stamped it (1) or it is the userspace fallback (0) */
+    unsigned long long last_rx_ns;
+    int last_rx_from_kernel;
 };
 
 #endif // LOOP_DATA_H

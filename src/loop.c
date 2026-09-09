@@ -36,6 +36,8 @@ void us_internal_loop_data_init(struct us_loop_t *loop, void (*wakeup_cb)(struct
     loop->data.pre_cb = pre_cb;
     loop->data.post_cb = post_cb;
     loop->data.iteration_nr = 0;
+    loop->data.last_rx_ns = 0;
+    loop->data.last_rx_from_kernel = 0;
 
     loop->data.wakeup_async = us_internal_create_async(loop, 1, 0);
     us_internal_async_set(loop->data.wakeup_async, (void (*)(struct us_internal_async *)) wakeup_cb);
@@ -212,6 +214,7 @@ struct us_socket_t *us_adopt_accepted_socket(int ssl, struct us_socket_context_t
     s->timeout = 255;
     s->long_timeout = 255;
     s->low_prio_state = 0;
+    s->rx_timestamps = 0;
 
     /* We always use nodelay */
     bsd_socket_nodelay(accepted_fd, 1);
@@ -358,7 +361,14 @@ void us_internal_dispatch_ready_poll(struct us_poll_t *p, int error, int events)
 
                 int length;
                 read_more:
-                length = bsd_recv(us_poll_fd(&s->p), s->context->loop->data.recv_buf + LIBUS_RECV_BUFFER_PADDING, LIBUS_RECV_BUFFER_LENGTH, 0);
+                if (s->rx_timestamps) {
+                    /* Opt-in path: the kernel receive timestamp of this read is parked on the loop
+                     * for the on_data callback chain below to pick up */
+                    length = bsd_recv_ts(us_poll_fd(&s->p), s->context->loop->data.recv_buf + LIBUS_RECV_BUFFER_PADDING, LIBUS_RECV_BUFFER_LENGTH, 0,
+                        &s->context->loop->data.last_rx_ns, &s->context->loop->data.last_rx_from_kernel);
+                } else {
+                    length = bsd_recv(us_poll_fd(&s->p), s->context->loop->data.recv_buf + LIBUS_RECV_BUFFER_PADDING, LIBUS_RECV_BUFFER_LENGTH, 0);
+                }
                 if (length > 0) {
                     s = s->context->on_data(s, s->context->loop->data.recv_buf + LIBUS_RECV_BUFFER_PADDING, length);
 
@@ -396,6 +406,17 @@ void us_loop_integrate(struct us_loop_t *loop) {
 
 void *us_loop_ext(struct us_loop_t *loop) {
     return loop + 1;
+}
+
+unsigned long long us_loop_last_rx_timestamp(struct us_loop_t *loop, int *from_kernel) {
+    if (from_kernel) {
+        *from_kernel = loop->data.last_rx_from_kernel;
+    }
+    return loop->data.last_rx_ns;
+}
+
+unsigned long long us_realtime_ns() {
+    return bsd_realtime_ns();
 }
 
 #endif
