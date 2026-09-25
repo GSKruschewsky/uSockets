@@ -153,6 +153,7 @@ struct us_socket_context_t {
 #ifndef LIBUS_NO_SSL
 
 struct us_internal_ssl_socket_context_t;
+char *us_internal_ssl_loop_read_buffer(struct us_loop_t *loop, unsigned int *length);
 struct us_internal_ssl_socket_t;
 
 /* SNI functions */

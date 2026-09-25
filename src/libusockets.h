@@ -260,6 +260,16 @@ unsigned long long us_loop_last_rx_timestamp(struct us_loop_t *loop, int *from_k
 /* CLOCK_REALTIME now, in nanoseconds since the Unix epoch (the clock the rx timestamps use) */
 unsigned long long us_realtime_ns();
 
+/* The loop's receive buffers: 0 = the plain-socket read buffer, 1 = the TLS plaintext buffer (NULL
+ * until the first TLS context exists). Every on_data chunk, and so every message dispatched from it,
+ * lives inside one of them unless it was reassembled or inflated elsewhere. Lets an embedder keep one
+ * persistent view per buffer instead of wrapping every message. */
+char *us_loop_recv_buffer(struct us_loop_t *loop, int which, unsigned int *length);
+
+/* Which receive buffer [data, data + length) lies in (0 or 1, with *offset set to the byte offset
+ * inside it), or -1 when it lies in neither. */
+int us_loop_recv_buffer_of(struct us_loop_t *loop, const char *data, unsigned int length, unsigned int *offset);
+
 /* Blocks the calling thread and drives the event loop until no more non-fallthrough polls are scheduled */
 void us_loop_run(struct us_loop_t *loop);
 
