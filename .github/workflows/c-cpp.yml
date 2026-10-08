@@ -26,9 +26,9 @@ jobs:
           $Env:WITH_LTO='0'
           make examples
           ls
+          ./connect_test.exe
           ./hammer_test.exe
           ./hammer_test_unix.exe
-          ./connect_test.exe
           ./http_load_test.exe
   
   test_macos_libuv:
@@ -42,7 +42,7 @@ jobs:
     - name: build examples
       run: CFLAGS=-I$(brew --prefix libuv)/include LDFLAGS=-L$(brew --prefix libuv)/lib WITH_LIBUV=1 WITH_ASAN=1 make examples
     - name: run test
-      run: ./hammer_test && ./hammer_test_unix && ./connect_test
+      run: ./connect_test && ./hammer_test && ./hammer_test_unix
 
   test_macos_kqueue:
 
@@ -53,7 +53,7 @@ jobs:
     - name: build examples
       run: WITH_ASAN=1 make examples
     - name: run test
-      run: ./hammer_test && ./hammer_test_unix && ./connect_test
+      run: ./connect_test && ./hammer_test && ./hammer_test_unix
 
   test_linux_libuv:
 
@@ -66,7 +66,7 @@ jobs:
     - name: build examples
       run: WITH_LIBUV=1 WITH_ASAN=1 make examples
     - name: run test
-      run: ./hammer_test && ./hammer_test_unix && ./connect_test
+      run: ./connect_test && ./hammer_test && ./hammer_test_unix
 
   test_linux_epoll:
 
@@ -77,4 +77,4 @@ jobs:
     - name: build examples
       run: WITH_ASAN=1 make examples
     - name: run test
-      run: ./hammer_test && ./hammer_test_unix && ./connect_test
+      run: ./connect_test && ./hammer_test && ./hammer_test_unix

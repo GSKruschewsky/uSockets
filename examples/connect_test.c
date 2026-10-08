@@ -16,14 +16,22 @@
 #include <string.h>
 #include <errno.h>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+typedef SOCKET refused_socket_t;
+#define REFUSED_SOCKET_INVALID INVALID_SOCKET
+#else
 #include <dlfcn.h>
 #include <netdb.h>
 #include <arpa/inet.h>
+#include <netinet/in.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <time.h>
 #include <sys/socket.h>
+typedef int refused_socket_t;
+#define REFUSED_SOCKET_INVALID -1
 #endif
 
 const int SSL = 0;
@@ -118,6 +126,52 @@ static void wait_for_lookups() {}
 static long long now_ms() { return 0; }
 #define CAN_DELAY_LOOKUPS 0
 #endif
+
+/* A port on which every connect is refused: a TCP socket bound (dual-stack if possible) but
+ * never listening. Keeping it bound also means the connecting socket can never be handed this
+ * port as its own ephemeral port, which would turn the dial into a successful TCP self-connect
+ * (seen on macOS when the port was merely freed again). Returns 0 and keeps the socket open. */
+static refused_socket_t refused_socket = REFUSED_SOCKET_INVALID;
+
+static int bind_refused_port() {
+    struct sockaddr_storage addr;
+    socklen_t addr_len;
+
+    refused_socket = socket(AF_INET6, SOCK_STREAM, 0);
+    if (refused_socket != REFUSED_SOCKET_INVALID) {
+        int disabled = 0;
+        setsockopt(refused_socket, IPPROTO_IPV6, IPV6_V6ONLY, (const char *) &disabled, sizeof(disabled));
+        struct sockaddr_in6 *in6 = (struct sockaddr_in6 *) &addr;
+        memset(in6, 0, sizeof(*in6));
+        in6->sin6_family = AF_INET6;
+        in6->sin6_addr = in6addr_any;
+        addr_len = sizeof(*in6);
+    } else {
+        refused_socket = socket(AF_INET, SOCK_STREAM, 0);
+        if (refused_socket == REFUSED_SOCKET_INVALID) {
+            return -1;
+        }
+        struct sockaddr_in *in4 = (struct sockaddr_in *) &addr;
+        memset(in4, 0, sizeof(*in4));
+        in4->sin_family = AF_INET;
+        in4->sin_addr.s_addr = htonl(INADDR_ANY);
+        addr_len = sizeof(*in4);
+    }
+
+    if (bind(refused_socket, (struct sockaddr *) &addr, addr_len) || getsockname(refused_socket, (struct sockaddr *) &addr, &addr_len)) {
+        return -1;
+    }
+
+    return ntohs(addr.ss_family == AF_INET6 ? ((struct sockaddr_in6 *) &addr)->sin6_port : ((struct sockaddr_in *) &addr)->sin_port);
+}
+
+static void close_refused_port() {
+#ifdef _WIN32
+    closesocket(refused_socket);
+#else
+    close(refused_socket);
+#endif
+}
 
 /* ---- test harness ---- */
 
@@ -425,14 +479,11 @@ int main() {
     }
     listen_port = us_socket_local_port(SSL, (struct us_socket_t *) listen_socket);
 
-    /* Find a port nobody listens on: take one, then give it back */
-    struct us_listen_socket_t *tmp = us_socket_context_listen(SSL, server_context, NULL, 0, 0, 0);
-    if (!tmp) {
-        printf("Failed to listen\n");
+    refused_port = bind_refused_port();
+    if (refused_port <= 0) {
+        printf("Failed to reserve a refused port\n");
         return 1;
     }
-    refused_port = us_socket_local_port(SSL, (struct us_socket_t *) tmp);
-    us_listen_socket_close(SSL, tmp);
 
     step_timer = us_create_timer(loop, 1, 0);
     tick_timer = us_create_timer(loop, 1, 0);
@@ -445,6 +496,7 @@ int main() {
     us_timer_close(tick_timer);
     us_timer_close(watchdog_timer);
     us_loop_free(loop);
+    close_refused_port();
 
     /* Let the cancelled lookups of the last step finish so that they free their requests
      * before the leak checker looks */
