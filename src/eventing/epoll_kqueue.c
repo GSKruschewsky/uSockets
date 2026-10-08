@@ -407,6 +407,13 @@ void us_internal_async_wakeup(struct us_internal_async *a) {
     int written = write(us_poll_fd((struct us_poll_t *) a), &one, 8);
     (void)written;
 }
+
+/* The loop is driven by its poll count, so asyncs need no ref'ing */
+void us_internal_async_ref(struct us_internal_async *a) {
+}
+
+void us_internal_async_unref(struct us_internal_async *a) {
+}
 #else
 struct us_internal_async *us_internal_create_async(struct us_loop_t *loop, int fallthrough, unsigned int ext_size) {
     struct us_internal_callback_t *cb = malloc(sizeof(struct us_internal_callback_t) + ext_size);
@@ -452,6 +459,13 @@ void us_internal_async_wakeup(struct us_internal_async *a) {
     struct kevent event;
     EV_SET(&event, (uintptr_t) internal_cb, EVFILT_USER, EV_ADD | EV_ONESHOT, NOTE_TRIGGER, 0, internal_cb);
     kevent(internal_cb->loop->fd, &event, 1, NULL, 0, NULL);
+}
+
+/* The loop is driven by its poll count, so asyncs need no ref'ing */
+void us_internal_async_ref(struct us_internal_async *a) {
+}
+
+void us_internal_async_unref(struct us_internal_async *a) {
 }
 #endif
 

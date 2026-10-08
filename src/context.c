@@ -259,6 +259,17 @@ void us_socket_context_free(int ssl, struct us_socket_context_t *context) {
     /* This path is taken once either way - always AFTER whatever SSL may do BEFORE.
      * This is the opposite order compared to when creating the context - SSL code is cleaning up before non-SSL */
 
+    /* A connect whose name lookup is still in flight would complete into this freed context,
+     * so cancel those now. They never opened, so there is no on_close to emit. */
+    struct us_socket_t *s = context->head_sockets;
+    while (s) {
+        struct us_socket_t *nextS = s->next;
+        if (s->resolving) {
+            us_socket_close_connecting(0, s);
+        }
+        s = nextS;
+    }
+
     us_internal_loop_unlink(context->loop, context);
     free(context);
 }
@@ -287,6 +298,7 @@ struct us_listen_socket_t *us_socket_context_listen(int ssl, struct us_socket_co
     ls->s.long_timeout = 255;
     ls->s.low_prio_state = 0;
     ls->s.rx_timestamps = 0;
+    ls->s.resolving = 0;
     ls->s.next = 0;
     us_internal_socket_context_link_listen_socket(context, ls);
 
@@ -319,6 +331,7 @@ struct us_listen_socket_t *us_socket_context_listen_unix(int ssl, struct us_sock
     ls->s.long_timeout = 255;
     ls->s.low_prio_state = 0;
     ls->s.rx_timestamps = 0;
+    ls->s.resolving = 0;
     ls->s.next = 0;
     us_internal_socket_context_link_listen_socket(context, ls);
 
@@ -339,28 +352,11 @@ int us_socket_context_rx_timestamps(int ssl, struct us_socket_context_t *context
     return context->rx_timestamps;
 }
 
-struct us_socket_t *us_socket_context_connect(int ssl, struct us_socket_context_t *context, const char *host, int port, const char *source_host, int options, int socket_ext_size) {
-#ifndef LIBUS_NO_SSL
-    if (ssl) {
-        return (struct us_socket_t *) us_internal_ssl_socket_context_connect((struct us_internal_ssl_socket_context_t *) context, host, port, source_host, options, socket_ext_size);
-    }
-#endif
-
-    LIBUS_SOCKET_DESCRIPTOR connect_socket_fd = bsd_create_connect_socket(host, port, source_host, options);
-    if (connect_socket_fd == LIBUS_SOCKET_ERROR) {
-        return 0;
-    }
-
-    /* Opt-in kernel receive timestamps: enabled per socket at connect, and the flag rides on
-     * the socket itself so it survives adoption into another context */
-    if (context->rx_timestamps) {
-        bsd_socket_enable_rx_timestamps(connect_socket_fd);
-    }
-
+/* Shared tail of the two connect paths: wraps a connecting fd in a socket linked into the context */
+static struct us_socket_t *us_internal_create_connect_socket(struct us_socket_context_t *context, LIBUS_SOCKET_DESCRIPTOR connect_socket_fd, int socket_ext_size) {
     /* Connect sockets are semi-sockets just like listen sockets */
     struct us_poll_t *p = us_create_poll(context->loop, 0, sizeof(struct us_socket_t) - sizeof(struct us_poll_t) + socket_ext_size);
     us_poll_init(p, connect_socket_fd, POLL_TYPE_SEMI_SOCKET);
-    us_poll_start(p, context->loop, LIBUS_SOCKET_WRITABLE);
 
     struct us_socket_t *connect_socket = (struct us_socket_t *) p;
 
@@ -370,7 +366,63 @@ struct us_socket_t *us_socket_context_connect(int ssl, struct us_socket_context_
     connect_socket->long_timeout = 255;
     connect_socket->low_prio_state = 0;
     connect_socket->rx_timestamps = context->rx_timestamps ? 1 : 0;
+    connect_socket->resolving = connect_socket_fd == LIBUS_SOCKET_ERROR;
     us_internal_socket_context_link_socket(context, connect_socket);
+
+    /* A socket whose name is still being resolved has no fd to poll yet; its poll is started
+     * once the lookup completes (see resolve.c) */
+    if (!connect_socket->resolving) {
+        us_poll_start(p, context->loop, LIBUS_SOCKET_WRITABLE);
+    }
+
+    return connect_socket;
+}
+
+struct us_socket_t *us_socket_context_connect(int ssl, struct us_socket_context_t *context, const char *host, int port, const char *source_host, int options, int socket_ext_size) {
+#ifndef LIBUS_NO_SSL
+    if (ssl) {
+        return (struct us_socket_t *) us_internal_ssl_socket_context_connect((struct us_internal_ssl_socket_context_t *) context, host, port, source_host, options, socket_ext_size);
+    }
+#endif
+
+    /* Fast path: a numeric host (and a numeric or absent source host) needs no lookup, so we
+     * connect synchronously right here, exactly as before */
+    struct addrinfo *result = NULL, *source_result = NULL;
+    int host_is_numeric = bsd_resolve_connect_addr(host, port, 1, &result) == 0;
+    int source_is_numeric = !source_host || bsd_resolve_source_addr(source_host, 1, &source_result) == 0;
+
+    if (host_is_numeric && source_is_numeric) {
+        LIBUS_SOCKET_DESCRIPTOR connect_socket_fd = bsd_create_connect_socket_resolved(result, source_result, options, NULL);
+        bsd_free_addrinfo(source_result);
+        bsd_free_addrinfo(result);
+
+        if (connect_socket_fd == LIBUS_SOCKET_ERROR) {
+            return 0;
+        }
+
+        /* Opt-in kernel receive timestamps: enabled per socket at connect, and the flag rides on
+         * the socket itself so it survives adoption into another context */
+        if (context->rx_timestamps) {
+            bsd_socket_enable_rx_timestamps(connect_socket_fd);
+        }
+
+        return us_internal_create_connect_socket(context, connect_socket_fd, socket_ext_size);
+    }
+
+    bsd_free_addrinfo(source_result);
+    bsd_free_addrinfo(result);
+
+    /* Slow path: the name lookup would block, so it runs on a resolver thread while the caller
+     * already holds a (not yet connected) socket it can time out or close. The connect is finished
+     * on the loop thread when the lookup completes and lands in on_open or on_connect_error. */
+    struct us_socket_t *connect_socket = us_internal_create_connect_socket(context, LIBUS_SOCKET_ERROR, socket_ext_size);
+
+    if (us_internal_resolve_connect(connect_socket, host, port, source_host, options)) {
+        /* Could not even start the lookup (out of memory or threads) */
+        us_internal_socket_context_unlink_socket(context, connect_socket);
+        us_poll_free((struct us_poll_t *) connect_socket, context->loop);
+        return 0;
+    }
 
     return connect_socket;
 }
@@ -400,6 +452,7 @@ struct us_socket_t *us_socket_context_connect_unix(int ssl, struct us_socket_con
     connect_socket->long_timeout = 255;
     connect_socket->low_prio_state = 0;
     connect_socket->rx_timestamps = 0; /* Kernel rx timestamps are only requested for TCP connects */
+    connect_socket->resolving = 0;
     us_internal_socket_context_link_socket(context, connect_socket);
 
     return connect_socket;
@@ -438,6 +491,11 @@ struct us_socket_t *us_socket_context_adopt_socket(int ssl, struct us_socket_con
     struct us_socket_t *new_s = (struct us_socket_t *) us_poll_resize(&s->p, s->context->loop, sizeof(struct us_socket_t) + ext_size);
     new_s->timeout = 255;
     new_s->long_timeout = 255;
+
+    /* An in-flight name lookup must finish the connect on the moved socket */
+    if (new_s->resolving) {
+        us_internal_resolve_socket_moved(s, new_s);
+    }
 
     if (new_s->low_prio_state == 1) {
         /* update pointers in low-priority queue */

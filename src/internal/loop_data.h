@@ -38,6 +38,10 @@ struct us_internal_loop_data_t {
      * kernel stamped it (1) or it is the userspace fallback (0) */
     unsigned long long last_rx_ns;
     int last_rx_from_kernel;
+    /* In-flight connect name lookups (loop thread only) and the async their
+     * resolver threads wake the loop with (created on first use) */
+    struct us_internal_resolve_request_t *resolve_head;
+    struct us_internal_async *resolve_async;
 };
 
 #endif // LOOP_DATA_H

@@ -194,7 +194,9 @@ void us_loop_run(struct us_loop_t *loop) {
 
 struct us_poll_t *us_create_poll(struct us_loop_t *loop, int fallthrough, unsigned int ext_size) {
     struct us_poll_t *p = (struct us_poll_t *) malloc(sizeof(struct us_poll_t) + ext_size);
-    p->uv_p = malloc(sizeof(uv_poll_t));
+    /* Zeroed so that a poll which is freed without ever having been started (a connect whose
+     * name lookup was cancelled) reads as "not closing" in us_poll_free */
+    p->uv_p = calloc(1, sizeof(uv_poll_t));
     p->uv_p->data = p;
     return p;
 }
@@ -300,6 +302,19 @@ void us_internal_async_wakeup(struct us_internal_async *a) {
 
     uv_async_t *uv_async = (uv_async_t *) (internal_cb + 1);
     uv_async_send(uv_async);
+}
+
+/* Asyncs are unref'ed by default; ref'ing one keeps uv_run going while work is outstanding */
+void us_internal_async_ref(struct us_internal_async *a) {
+    struct us_internal_callback_t *internal_cb = (struct us_internal_callback_t *) a;
+
+    uv_ref((uv_handle_t *) (uv_async_t *) (internal_cb + 1));
+}
+
+void us_internal_async_unref(struct us_internal_async *a) {
+    struct us_internal_callback_t *internal_cb = (struct us_internal_callback_t *) a;
+
+    uv_unref((uv_handle_t *) (uv_async_t *) (internal_cb + 1));
 }
 
 #endif

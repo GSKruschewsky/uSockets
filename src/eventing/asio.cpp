@@ -72,7 +72,11 @@ extern "C" {
 // poll
 void us_poll_init(struct us_poll_t *p, LIBUS_SOCKET_DESCRIPTOR fd, int poll_type) {
     struct boost_block_poll_t *boost_block = (struct boost_block_poll_t *) p->boost_block;
-    boost_block->assign(fd);
+    /* A connecting socket whose name is still being resolved has no fd yet; it is inited again
+     * with the real fd once the lookup completes */
+    if (fd != LIBUS_SOCKET_ERROR) {
+        boost_block->assign(fd);
+    }
     p->poll_type = poll_type;
     p->events = 0;
 
@@ -422,7 +426,8 @@ struct us_internal_async *us_internal_create_async(struct us_loop_t *loop, int f
     // these properties are accessed from another thread when wakeup
     cb->m.lock();
     cb->loop = loop; // the only lock needed
-    cb->cb_expects_the_loop = 0;
+    cb->cb_expects_the_loop = 1; // async callbacks (loop wakeup, resolver) take the loop, not the async
+    cb->leave_poll_ready = 0;
     cb->p.poll_type = POLL_TYPE_CALLBACK; // this is missing from libuv flow
     cb->m.unlock();
 
@@ -442,6 +447,13 @@ void us_internal_async_set(struct us_internal_async *a, void (*cb)(struct us_int
     struct boost_async *internal_cb = (struct boost_async *) a;
 
     internal_cb->cb = (void(*)(struct us_internal_callback_t *)) cb;
+}
+
+/* The io_context is kept busy by its outstanding operations, so asyncs need no ref'ing */
+void us_internal_async_ref(struct us_internal_async *a) {
+}
+
+void us_internal_async_unref(struct us_internal_async *a) {
 }
 
 void us_internal_async_wakeup(struct us_internal_async *a) {

@@ -38,6 +38,8 @@ void us_internal_loop_data_init(struct us_loop_t *loop, void (*wakeup_cb)(struct
     loop->data.iteration_nr = 0;
     loop->data.last_rx_ns = 0;
     loop->data.last_rx_from_kernel = 0;
+    loop->data.resolve_head = 0;
+    loop->data.resolve_async = 0;
 
     loop->data.wakeup_async = us_internal_create_async(loop, 1, 0);
     us_internal_async_set(loop->data.wakeup_async, (void (*)(struct us_internal_async *)) wakeup_cb);
@@ -49,6 +51,9 @@ void us_internal_loop_data_free(struct us_loop_t *loop) {
 #endif
 
     free(loop->data.recv_buf);
+
+    /* Drops in-flight connect name lookups and their async */
+    us_internal_resolve_loop_free(loop);
 
     us_timer_close(loop->data.sweep_timer);
     us_internal_async_close(loop->data.wakeup_async);
@@ -215,6 +220,7 @@ struct us_socket_t *us_adopt_accepted_socket(int ssl, struct us_socket_context_t
     s->long_timeout = 255;
     s->low_prio_state = 0;
     s->rx_timestamps = 0;
+    s->resolving = 0;
 
     /* We always use nodelay */
     bsd_socket_nodelay(accepted_fd, 1);
