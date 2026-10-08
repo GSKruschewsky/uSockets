@@ -127,50 +127,50 @@ static long long now_ms() { return 0; }
 #define CAN_DELAY_LOOKUPS 0
 #endif
 
-/* A port on which every connect is refused: a TCP socket bound (dual-stack if possible) but
- * never listening. Keeping it bound also means the connecting socket can never be handed this
- * port as its own ephemeral port, which would turn the dial into a successful TCP self-connect
- * (seen on macOS when the port was merely freed again). Returns 0 and keeps the socket open. */
-static refused_socket_t refused_socket = REFUSED_SOCKET_INVALID;
-
-static int bind_refused_port() {
-    struct sockaddr_storage addr;
-    socklen_t addr_len;
-
-    refused_socket = socket(AF_INET6, SOCK_STREAM, 0);
-    if (refused_socket != REFUSED_SOCKET_INVALID) {
-        int disabled = 0;
-        setsockopt(refused_socket, IPPROTO_IPV6, IPV6_V6ONLY, (const char *) &disabled, sizeof(disabled));
-        struct sockaddr_in6 *in6 = (struct sockaddr_in6 *) &addr;
-        memset(in6, 0, sizeof(*in6));
-        in6->sin6_family = AF_INET6;
-        in6->sin6_addr = in6addr_any;
-        addr_len = sizeof(*in6);
-    } else {
-        refused_socket = socket(AF_INET, SOCK_STREAM, 0);
-        if (refused_socket == REFUSED_SOCKET_INVALID) {
-            return -1;
+/* A port on which every connect is refused: nothing bound to it, outside every OS's ephemeral
+ * range. Being unbound matters because a bound-but-not-listening socket gets its SYNs silently
+ * dropped on macOS instead of reset. Being outside the ephemeral range matters because an
+ * unbound port in that range can be handed to the connecting socket itself, turning the dial
+ * into a successful TCP self-connect (seen on macOS). Each candidate is verified free with a
+ * dual-stack wildcard bind that is undone again. Returns the port, or -1. */
+static int find_refused_port() {
+    for (int port = 10000; port < 11000; port++) {
+        struct sockaddr_storage addr;
+        socklen_t addr_len;
+        refused_socket_t fd = socket(AF_INET6, SOCK_STREAM, 0);
+        if (fd != REFUSED_SOCKET_INVALID) {
+            int disabled = 0;
+            setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, (const char *) &disabled, sizeof(disabled));
+            struct sockaddr_in6 *in6 = (struct sockaddr_in6 *) &addr;
+            memset(in6, 0, sizeof(*in6));
+            in6->sin6_family = AF_INET6;
+            in6->sin6_addr = in6addr_any;
+            in6->sin6_port = htons((unsigned short) port);
+            addr_len = sizeof(*in6);
+        } else {
+            fd = socket(AF_INET, SOCK_STREAM, 0);
+            if (fd == REFUSED_SOCKET_INVALID) {
+                return -1;
+            }
+            struct sockaddr_in *in4 = (struct sockaddr_in *) &addr;
+            memset(in4, 0, sizeof(*in4));
+            in4->sin_family = AF_INET;
+            in4->sin_addr.s_addr = htonl(INADDR_ANY);
+            in4->sin_port = htons((unsigned short) port);
+            addr_len = sizeof(*in4);
         }
-        struct sockaddr_in *in4 = (struct sockaddr_in *) &addr;
-        memset(in4, 0, sizeof(*in4));
-        in4->sin_family = AF_INET;
-        in4->sin_addr.s_addr = htonl(INADDR_ANY);
-        addr_len = sizeof(*in4);
-    }
 
-    if (bind(refused_socket, (struct sockaddr *) &addr, addr_len) || getsockname(refused_socket, (struct sockaddr *) &addr, &addr_len)) {
-        return -1;
-    }
-
-    return ntohs(addr.ss_family == AF_INET6 ? ((struct sockaddr_in6 *) &addr)->sin6_port : ((struct sockaddr_in *) &addr)->sin_port);
-}
-
-static void close_refused_port() {
+        int bound = bind(fd, (struct sockaddr *) &addr, addr_len) == 0;
 #ifdef _WIN32
-    closesocket(refused_socket);
+        closesocket(fd);
 #else
-    close(refused_socket);
+        close(fd);
 #endif
+        if (bound) {
+            return port;
+        }
+    }
+    return -1;
 }
 
 /* ---- test harness ---- */
@@ -479,9 +479,9 @@ int main() {
     }
     listen_port = us_socket_local_port(SSL, (struct us_socket_t *) listen_socket);
 
-    refused_port = bind_refused_port();
+    refused_port = find_refused_port();
     if (refused_port <= 0) {
-        printf("Failed to reserve a refused port\n");
+        printf("Failed to find a free port\n");
         return 1;
     }
 
@@ -496,7 +496,6 @@ int main() {
     us_timer_close(tick_timer);
     us_timer_close(watchdog_timer);
     us_loop_free(loop);
-    close_refused_port();
 
     /* Let the cancelled lookups of the last step finish so that they free their requests
      * before the leak checker looks */
