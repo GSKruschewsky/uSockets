@@ -27,8 +27,11 @@ jobs:
           make examples
           ls
           ./connect_test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./hammer_test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./hammer_test_unix.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./http_load_test.exe
   
   test_macos_libuv:

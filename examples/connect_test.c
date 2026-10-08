@@ -200,11 +200,15 @@ static int probe_port(int family, int port) {
     }
 #endif
 
-    fd_set writable;
+    /* A finished non-blocking connect shows up as writable; Windows reports a failed one in the
+     * exception set instead, so watch both */
+    fd_set writable, failed;
     FD_ZERO(&writable);
+    FD_ZERO(&failed);
     FD_SET(fd, &writable);
+    FD_SET(fd, &failed);
     struct timeval timeout = {1, 0};
-    if (select((int) fd + 1, NULL, &writable, NULL, &timeout) <= 0) {
+    if (select((int) fd + 1, NULL, &writable, &failed, &timeout) <= 0) {
         return close_probe(fd);
     }
 
