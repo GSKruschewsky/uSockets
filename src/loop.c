@@ -251,14 +251,17 @@ void us_internal_dispatch_ready_poll(struct us_poll_t *p, int error, int events)
             if (us_poll_events(p) == LIBUS_SOCKET_WRITABLE) {
                 struct us_socket_t *s = (struct us_socket_t *) p;
 
+                /* The outcome of a non-blocking connect is the socket's pending error, so ask for it
+                 * whether or not the poll flagged an error: epoll/kqueue only tell us that the connect
+                 * failed, not why, and libuv on kqueue reports a refused connect as plain writable */
+                int connect_error = bsd_socket_error(us_poll_fd(p));
+
                 /* It is perfectly possible to come here with an error */
-                if (error) {
+                if (error || connect_error) {
                     /* Emit error, close without emitting on_close.
-                     * The handler is optional (null unless registered) and the real
-                     * errno is fetched from the socket, as epoll/kqueue only tell
-                     * us that the connect failed, not why. */
+                     * The handler is optional (null unless registered). */
                     if (s->context->on_connect_error) {
-                        s->context->on_connect_error(s, bsd_socket_error(us_poll_fd(p)));
+                        s->context->on_connect_error(s, connect_error);
                     }
                     us_socket_close_connecting(0, s);
                 } else {
