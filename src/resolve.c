@@ -25,6 +25,10 @@
  * connect() and starts the poll, exactly as the numeric fast path does synchronously. From there
  * on the socket is an ordinary connecting socket and reaches on_open or on_connect_error.
  *
+ * The number of resolver threads per loop is bounded; further lookups wait in the in-flight list
+ * (oldest first) and are started as threads finish, so a reconnect storm never spawns hundreds of
+ * threads at once nor stalls the loop thread creating them.
+ *
  * Ownership: a request is shared between the loop thread and its resolver thread. The loop thread
  * owns the in-flight list and the socket; the resolver thread owns the results until it has
  * published them. The two flags "done" and "cancelled" are protected by the request's mutex and
@@ -38,6 +42,10 @@
 #include "internal/internal.h"
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+
+/* Lookups beyond this many running at once wait their turn */
+#define LIBUS_MAX_RESOLVER_THREADS 16
 
 #ifdef _WIN32
 #include <process.h>
@@ -60,6 +68,7 @@ struct us_internal_resolve_request_t {
     struct us_socket_t *socket;
     struct us_loop_t *loop;
     struct us_internal_resolve_request_t *prev, *next;
+    int spawned; /* 0 while waiting for a free resolver thread */
 
     /* Immutable once the resolver thread has started */
     char *host;
@@ -195,7 +204,10 @@ static void us_internal_resolve_complete(struct us_internal_resolve_request_t *r
     }
 
     struct us_socket_context_t *context = s->context;
-    int error = r->error;
+
+    /* A failed lookup is reported in its own code range, so it can never be mistaken for a
+     * socket error (EAI_* values overlap errno values on some platforms) */
+    int error = r->error ? LIBUS_CONNECT_ERROR_RESOLVE_BASE - (r->error < 0 ? -r->error : r->error) : 0;
 
     if (!error) {
         LIBUS_SOCKET_DESCRIPTOR fd = bsd_create_connect_socket_resolved(r->result, r->source_result, r->options, &error);
@@ -220,6 +232,43 @@ static void us_internal_resolve_complete(struct us_internal_resolve_request_t *r
     us_socket_close_connecting(0, s);
 }
 
+/* A lookup that could not even be started fails like any other connect error (loop thread) */
+static void us_internal_resolve_fail(struct us_internal_resolve_request_t *r, int error) {
+    struct us_socket_t *s = r->socket;
+    us_internal_resolve_unlink(r->loop, r);
+    us_internal_resolve_free_request(r);
+
+    if (s && !us_socket_is_closed(0, s)) {
+        if (s->context->on_connect_error) {
+            s->context->on_connect_error(s, error);
+        }
+        us_socket_close_connecting(0, s);
+    }
+}
+
+/* Starts queued lookups (oldest first) while there are resolver threads to spare */
+static void us_internal_resolve_start_queued(struct us_loop_t *loop) {
+    while (loop->data.resolve_running < LIBUS_MAX_RESOLVER_THREADS) {
+        struct us_internal_resolve_request_t *oldest = NULL;
+        for (struct us_internal_resolve_request_t *r = loop->data.resolve_head; r; r = r->next) {
+            if (!r->spawned) {
+                oldest = r;
+            }
+        }
+        if (!oldest) {
+            return;
+        }
+
+        oldest->spawned = 1;
+        if (us_internal_resolve_spawn(oldest)) {
+            /* Out of threads: the socket fails as a connect error, which the embedder may retry */
+            us_internal_resolve_fail(oldest, EAGAIN);
+        } else {
+            loop->data.resolve_running++;
+        }
+    }
+}
+
 /* Woken by resolver threads; drains every completed lookup. Scanning from the head again after
  * each completion keeps us safe against callbacks closing other resolving sockets (which unlinks
  * and possibly frees their requests). */
@@ -227,6 +276,9 @@ static void us_internal_resolve_async_cb(struct us_loop_t *loop) {
     for (;;) {
         struct us_internal_resolve_request_t *completed = NULL;
         for (struct us_internal_resolve_request_t *r = loop->data.resolve_head; r; r = r->next) {
+            if (!r->spawned) {
+                continue;
+            }
             us_internal_mutex_lock(&r->mutex);
             int done = r->done;
             us_internal_mutex_unlock(&r->mutex);
@@ -237,20 +289,32 @@ static void us_internal_resolve_async_cb(struct us_loop_t *loop) {
         }
 
         if (!completed) {
-            return;
+            break;
         }
 
         /* Once done is set the resolver thread never touches the request again */
         us_internal_resolve_unlink(loop, completed);
+        loop->data.resolve_running--;
         us_internal_resolve_complete(completed);
         us_internal_resolve_free_request(completed);
     }
+
+    us_internal_resolve_start_queued(loop);
 }
 
 /* Forgets a request. If the resolver thread is still running it will free the request when
  * it finishes; otherwise we free it now. */
 static void us_internal_resolve_cancel_request(struct us_loop_t *loop, struct us_internal_resolve_request_t *r) {
     us_internal_resolve_unlink(loop, r);
+
+    /* Still waiting for a thread: nobody else knows about it */
+    if (!r->spawned) {
+        us_internal_resolve_free_request(r);
+        return;
+    }
+
+    /* The thread (if still running) finishes on its own; it no longer counts towards the cap */
+    loop->data.resolve_running--;
 
     us_internal_mutex_lock(&r->mutex);
     int done = r->done;
@@ -283,6 +347,7 @@ int us_internal_resolve_connect(struct us_socket_t *s, const char *host, int por
     r->socket = s;
     r->loop = loop;
     r->prev = r->next = NULL;
+    r->spawned = 0;
     r->host = us_internal_strdup(host);
     r->source_host = us_internal_strdup(source_host);
     r->port = port;
@@ -301,10 +366,15 @@ int us_internal_resolve_connect(struct us_socket_t *s, const char *host, int por
 
     us_internal_resolve_link(loop, r);
 
-    if (us_internal_resolve_spawn(r)) {
-        us_internal_resolve_unlink(loop, r);
-        us_internal_resolve_free_request(r);
-        return -1;
+    /* Start it now if a thread is available, otherwise it waits for one to finish */
+    if (loop->data.resolve_running < LIBUS_MAX_RESOLVER_THREADS) {
+        r->spawned = 1;
+        if (us_internal_resolve_spawn(r)) {
+            us_internal_resolve_unlink(loop, r);
+            us_internal_resolve_free_request(r);
+            return -1;
+        }
+        loop->data.resolve_running++;
     }
 
     return 0;

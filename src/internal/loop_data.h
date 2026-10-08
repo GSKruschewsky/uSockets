@@ -42,6 +42,8 @@ struct us_internal_loop_data_t {
      * resolver threads wake the loop with (created on first use) */
     struct us_internal_resolve_request_t *resolve_head;
     struct us_internal_async *resolve_async;
+    /* Resolver threads currently running for this loop (bounded, further lookups queue) */
+    int resolve_running;
 };
 
 #endif // LOOP_DATA_H

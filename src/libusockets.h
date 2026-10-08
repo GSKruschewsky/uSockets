@@ -184,10 +184,20 @@ void us_socket_context_on_timeout(int ssl, struct us_socket_context_t *context,
     struct us_socket_t *(*on_timeout)(struct us_socket_t *s));
 void us_socket_context_on_long_timeout(int ssl, struct us_socket_context_t *context,
     struct us_socket_t *(*on_timeout)(struct us_socket_t *s));
-/* This one is only used for when a connecting socket fails in a late stage: the connect was refused or
- * timed out (code is the socket error, e.g. ECONNREFUSED), or the host name could not be resolved
- * (code is the getaddrinfo error, e.g. EAI_NONAME). The socket is closed right after this returns,
- * without on_close being emitted. Not emitted for sockets you cancel with us_socket_close_connecting. */
+/* on_connect_error codes at or below this value are failed name lookups: the code is
+ * LIBUS_CONNECT_ERROR_RESOLVE_BASE minus the absolute getaddrinfo error (EAI_*), kept apart from
+ * the socket error numbers which overlap with EAI_* values on some platforms */
+#define LIBUS_CONNECT_ERROR_RESOLVE_BASE (-100000)
+#define LIBUS_CONNECT_ERROR_IS_RESOLVE(code) ((code) <= LIBUS_CONNECT_ERROR_RESOLVE_BASE)
+#define LIBUS_CONNECT_ERROR_RESOLVE_CODE(code) (LIBUS_CONNECT_ERROR_RESOLVE_BASE - (code))
+
+/* This one is only used for when a connecting socket fails in a late stage: the connect was refused,
+ * unroutable or timed out (code is the socket error, e.g. ECONNREFUSED), or the host name could not be
+ * resolved (code is in the LIBUS_CONNECT_ERROR_RESOLVE_BASE range, see above). The socket is closed right
+ * after this returns, without on_close being emitted. Not emitted for sockets you cancel with
+ * us_socket_close_connecting. Register it on every context you connect from: an unresolvable name
+ * is reported here rather than by us_socket_context_connect returning null, and without a handler
+ * the socket is silently closed. */
 void us_socket_context_on_connect_error(int ssl, struct us_socket_context_t *context,
     struct us_socket_t *(*on_connect_error)(struct us_socket_t *s, int code));
 

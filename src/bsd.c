@@ -854,8 +854,23 @@ LIBUS_SOCKET_DESCRIPTOR bsd_create_connect_socket_resolved(struct addrinfo *resu
         }
     }
 
-    /* Non-blocking, so this returns EINPROGRESS; the outcome is reported by the poll */
-    connect(fd, result->ai_addr, (socklen_t) result->ai_addrlen);
+    /* Non-blocking: the usual outcome is EINPROGRESS and the poll reports the result later, but
+     * no route (ENETUNREACH, EHOSTUNREACH), EADDRNOTAVAIL or EACCES fail right here and such a
+     * socket would never become writable on every platform, so report those now */
+    if (connect(fd, result->ai_addr, (socklen_t) result->ai_addrlen) == LIBUS_SOCKET_ERROR) {
+        int connect_error = bsd_last_error();
+#ifdef _WIN32
+        if (connect_error != WSAEWOULDBLOCK) {
+#else
+        if (connect_error != EINPROGRESS && connect_error != EINTR) {
+#endif
+            if (error) {
+                *error = connect_error;
+            }
+            bsd_close_socket(fd);
+            return LIBUS_SOCKET_ERROR;
+        }
+    }
 
     return fd;
 }
