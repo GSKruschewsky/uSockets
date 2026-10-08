@@ -30,6 +30,8 @@ typedef SOCKET refused_socket_t;
 #include <unistd.h>
 #include <time.h>
 #include <sys/socket.h>
+#include <sys/select.h>
+#include <fcntl.h>
 typedef int refused_socket_t;
 #define REFUSED_SOCKET_INVALID -1
 #endif
@@ -127,46 +129,93 @@ static long long now_ms() { return 0; }
 #define CAN_DELAY_LOOKUPS 0
 #endif
 
-/* A port on which every connect is refused: nothing bound to it, outside every OS's ephemeral
- * range. Being unbound matters because a bound-but-not-listening socket gets its SYNs silently
- * dropped on macOS instead of reset. Being outside the ephemeral range matters because an
- * unbound port in that range can be handed to the connecting socket itself, turning the dial
- * into a successful TCP self-connect (seen on macOS). Each candidate is verified free with a
- * dual-stack wildcard bind that is undone again. Returns the port, or -1. */
+/* A port on which every connect is refused. Rather than reasoning about bind semantics (which
+ * differ per OS: macOS silently drops SYNs to a bound-but-not-listening socket, and hands a
+ * freshly freed ephemeral port to the connecting socket itself, which then self-connects), we
+ * probe the property we need: a non-blocking connect to the port on each loopback address must
+ * fail with ECONNREFUSED within a second. Candidates lie outside every OS's ephemeral range. */
+static int close_probe(refused_socket_t fd) {
+#ifdef _WIN32
+    closesocket(fd);
+#else
+    close(fd);
+#endif
+    return 0;
+}
+
+/* 1 = refused, 0 = open or undecided, -1 = this address family is unavailable here */
+static int probe_port(int family, int port) {
+    struct sockaddr_storage addr;
+    socklen_t addr_len;
+    memset(&addr, 0, sizeof(addr));
+    if (family == AF_INET6) {
+        struct sockaddr_in6 *in6 = (struct sockaddr_in6 *) &addr;
+        in6->sin6_family = AF_INET6;
+        in6->sin6_addr = in6addr_loopback;
+        in6->sin6_port = htons((unsigned short) port);
+        addr_len = sizeof(*in6);
+    } else {
+        struct sockaddr_in *in4 = (struct sockaddr_in *) &addr;
+        in4->sin_family = AF_INET;
+        in4->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        in4->sin_port = htons((unsigned short) port);
+        addr_len = sizeof(*in4);
+    }
+
+    refused_socket_t fd = socket(family, SOCK_STREAM, 0);
+    if (fd == REFUSED_SOCKET_INVALID) {
+        return -1;
+    }
+#ifdef _WIN32
+    u_long nonblocking = 1;
+    ioctlsocket(fd, FIONBIO, &nonblocking);
+#else
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+#endif
+
+    int error = 0;
+    if (connect(fd, (struct sockaddr *) &addr, addr_len) == 0) {
+        /* Connected right away (self-connect or a listener) */
+        return close_probe(fd);
+    }
+#ifdef _WIN32
+    error = WSAGetLastError();
+    if (error != WSAEWOULDBLOCK) {
+        close_probe(fd);
+        return error == WSAECONNREFUSED ? 1 : (error == WSAEADDRNOTAVAIL || error == WSAEAFNOSUPPORT ? -1 : 0);
+    }
+#else
+    error = errno;
+    if (error != EINPROGRESS) {
+        close_probe(fd);
+        return error == ECONNREFUSED ? 1 : (error == EADDRNOTAVAIL || error == ENETUNREACH || error == EAFNOSUPPORT ? -1 : 0);
+    }
+#endif
+
+    fd_set writable;
+    FD_ZERO(&writable);
+    FD_SET(fd, &writable);
+    struct timeval timeout = {1, 0};
+    if (select((int) fd + 1, NULL, &writable, NULL, &timeout) <= 0) {
+        return close_probe(fd);
+    }
+
+    socklen_t error_len = sizeof(error);
+    getsockopt(fd, SOL_SOCKET, SO_ERROR, (char *) &error, &error_len);
+    close_probe(fd);
+#ifdef _WIN32
+    return error == WSAECONNREFUSED ? 1 : 0;
+#else
+    return error == ECONNREFUSED ? 1 : 0;
+#endif
+}
+
 static int find_refused_port() {
     for (int port = 10000; port < 11000; port++) {
-        struct sockaddr_storage addr;
-        socklen_t addr_len;
-        refused_socket_t fd = socket(AF_INET6, SOCK_STREAM, 0);
-        if (fd != REFUSED_SOCKET_INVALID) {
-            int disabled = 0;
-            setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, (const char *) &disabled, sizeof(disabled));
-            struct sockaddr_in6 *in6 = (struct sockaddr_in6 *) &addr;
-            memset(in6, 0, sizeof(*in6));
-            in6->sin6_family = AF_INET6;
-            in6->sin6_addr = in6addr_any;
-            in6->sin6_port = htons((unsigned short) port);
-            addr_len = sizeof(*in6);
-        } else {
-            fd = socket(AF_INET, SOCK_STREAM, 0);
-            if (fd == REFUSED_SOCKET_INVALID) {
-                return -1;
-            }
-            struct sockaddr_in *in4 = (struct sockaddr_in *) &addr;
-            memset(in4, 0, sizeof(*in4));
-            in4->sin_family = AF_INET;
-            in4->sin_addr.s_addr = htonl(INADDR_ANY);
-            in4->sin_port = htons((unsigned short) port);
-            addr_len = sizeof(*in4);
-        }
-
-        int bound = bind(fd, (struct sockaddr *) &addr, addr_len) == 0;
-#ifdef _WIN32
-        closesocket(fd);
-#else
-        close(fd);
-#endif
-        if (bound) {
+        int v4 = probe_port(AF_INET, port);
+        int v6 = probe_port(AF_INET6, port);
+        /* Refused on every family that exists here (and at least one exists) */
+        if (v4 != 0 && v6 != 0 && (v4 == 1 || v6 == 1)) {
             return port;
         }
     }
@@ -246,7 +295,8 @@ static struct us_socket_t *on_client_open(struct us_socket_t *s, int is_client, 
     CHECK(is_client, "client socket opened as server");
     CHECK(((struct client_socket *) us_socket_ext(SSL, s))->step == step, "on_open from a stale step");
     CHECK(us_socket_is_established(SSL, s), "opened socket must be established");
-    CHECK(us_socket_remote_port(SSL, s) == listen_port, "remote port mismatch");
+    CHECK(us_socket_remote_port(SSL, s) == listen_port, "remote port mismatch: remote %d local %d, listening on %d, refused port %d",
+        us_socket_remote_port(SSL, s), us_socket_local_port(SSL, s), listen_port, refused_port);
     opened++;
     return us_socket_close(SSL, s, 0, NULL);
 }
@@ -481,7 +531,7 @@ int main() {
 
     refused_port = find_refused_port();
     if (refused_port <= 0) {
-        printf("Failed to find a free port\n");
+        printf("Failed to find a refused port\n");
         return 1;
     }
 
