@@ -325,6 +325,17 @@ static void us_internal_resolve_cancel_request(struct us_loop_t *loop, struct us
     if (done) {
         us_internal_resolve_free_request(r);
     }
+
+    /* A cancelled thread never wakes the loop, so the freed slot would otherwise go unused by
+     * queued lookups until some other lookup completes. Wake the loop to start them on the next
+     * iteration rather than here: we may be inside a user callback, and starting a lookup can
+     * itself emit on_connect_error. */
+    for (struct us_internal_resolve_request_t *queued = loop->data.resolve_head; queued; queued = queued->next) {
+        if (!queued->spawned) {
+            us_internal_async_wakeup(loop->data.resolve_async);
+            break;
+        }
+    }
 }
 
 int us_internal_resolve_connect(struct us_socket_t *s, const char *host, int port, const char *source_host, int options) {

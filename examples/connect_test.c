@@ -407,6 +407,9 @@ static void run_step(struct us_timer_t *t) {
         case 9:
             CHECK(timeouts == 1 && opened == 0 && connect_errors == 0, "timeout during lookup: %d timeouts, %d opened, %d errors", timeouts, opened, connect_errors);
             break;
+        case 10:
+            CHECK(opened == 1 && closed == 1 && connect_errors == 0, "queued dial after cancelling all running ones: %d opened, %d closed, %d errors", opened, closed, connect_errors);
+            break;
     }
 
     reset_counters();
@@ -502,7 +505,22 @@ static void run_step(struct us_timer_t *t) {
             break;
         }
         case 10: {
-            printf("Step 10: context freed while a lookup is in flight\n");
+            printf("Step 10: a queued dial still starts after every running lookup is cancelled\n");
+            set_lookup_delay(CAN_DELAY_LOOKUPS ? 300 : 0);
+            /* Fill every resolver thread, queue one more, then cancel all the running ones:
+             * the queued dial must still get a thread and open */
+            struct us_socket_t *running[16];
+            for (int i = 0; i < 16; i++) {
+                running[i] = dial("localhost", listen_port);
+            }
+            dial("localhost", listen_port);
+            for (int i = 0; i < 16; i++) {
+                us_socket_close_connecting(SSL, running[i]);
+            }
+            break;
+        }
+        case 11: {
+            printf("Step 11: context freed while a lookup is in flight\n");
             set_lookup_delay(CAN_DELAY_LOOKUPS ? 500 : 0);
             dial("localhost", listen_port);
             dial("localhost", listen_port);
@@ -589,7 +607,7 @@ int main() {
      * before the leak checker looks */
     wait_for_lookups();
 
-    if (step != 10) {
+    if (step != 11) {
         printf("FAIL: loop exited at step %d\n", step);
         return 1;
     }
