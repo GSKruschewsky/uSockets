@@ -91,6 +91,18 @@ void us_internal_free_loop_ssl_data(struct us_loop_t *loop);
 void us_internal_socket_context_link_socket(struct us_socket_context_t *context, struct us_socket_t *s);
 void us_internal_socket_context_unlink_socket(struct us_socket_context_t *context, struct us_socket_t *s);
 
+/* Asynchronous name resolution for connecting sockets (resolve.c). The lookup runs on a resolver
+ * thread and the connect is finished on the loop thread once it completes. All of these run on
+ * the loop thread. */
+int us_internal_resolve_connect(struct us_socket_t *s, const char *host, int port, const char *source_host, int options);
+void us_internal_resolve_cancel(struct us_socket_t *s);
+void us_internal_resolve_socket_moved(struct us_socket_t *old_s, struct us_socket_t *new_s);
+void us_internal_resolve_loop_free(struct us_loop_t *loop);
+
+/* Keeps the loop alive while an async has outstanding work (only meaningful under libuv) */
+void us_internal_async_ref(struct us_internal_async *a);
+void us_internal_async_unref(struct us_internal_async *a);
+
 /* Sockets are polls */
 struct us_socket_t {
     alignas(LIBUS_EXT_ALIGNMENT) struct us_poll_t p; // 4 bytes
@@ -98,6 +110,7 @@ struct us_socket_t {
     unsigned char long_timeout; // 1 byte
     unsigned short low_prio_state; /* 0 = not in low-prio queue, 1 = is in low-prio queue, 2 = was in low-prio queue in this iteration */
     unsigned char rx_timestamps; /* 1 = reads go through bsd_recv_ts (kernel receive timestamps), set at connect from the context */
+    unsigned char resolving; /* 1 while a connect's name lookup is in flight: the socket has no fd and its poll is not started */
     struct us_socket_context_t *context;
     struct us_socket_t *prev, *next;
 };

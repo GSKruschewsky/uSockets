@@ -3,6 +3,17 @@ ifneq ($(WITH_LTO),0)
 	override CFLAGS += -flto
 endif
 
+# Connect name lookups run on a resolver thread (src/resolve.c); Windows uses its native threads
+ifneq ($(OS),Windows_NT)
+	override CFLAGS += -pthread
+	override LDFLAGS += -pthread
+endif
+
+# connect_test interposes getaddrinfo through dlsym, which older glibc keeps in libdl
+ifeq ($(shell uname -s),Linux)
+	override LDFLAGS += -ldl
+endif
+
 # WITH_BORINGSSL=1 enables BoringSSL support, linked statically (preferred over OpenSSL)
 # You need to call "make boringssl" before
 ifeq ($(WITH_BORINGSSL),1)

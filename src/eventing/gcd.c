@@ -70,6 +70,14 @@ void us_poll_init(struct us_poll_t *p, LIBUS_SOCKET_DESCRIPTOR fd, int poll_type
     p->poll_type = poll_type;
     p->fd = fd;
 
+    /* A connecting socket whose name is still being resolved has no fd yet; it is inited again
+     * with the real fd once the lookup completes */
+    if (fd == LIBUS_SOCKET_ERROR) {
+        p->gcd_read = NULL;
+        p->gcd_write = NULL;
+        return;
+    }
+
     /* I guess these are already activated? */
     p->gcd_read = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ, p->fd, 0, dispatch_get_main_queue());
     dispatch_set_context(p->gcd_read, p);
@@ -83,10 +91,12 @@ void us_poll_init(struct us_poll_t *p, LIBUS_SOCKET_DESCRIPTOR fd, int poll_type
 }
 
 void us_poll_free(struct us_poll_t *p, struct us_loop_t *loop) {
-    /* It is program error to release suspended filters */
-    us_poll_change(p, loop, LIBUS_SOCKET_READABLE | LIBUS_SOCKET_WRITABLE);
-    dispatch_release(p->gcd_read);
-    dispatch_release(p->gcd_write);
+    if (p->gcd_read) {
+        /* It is program error to release suspended filters */
+        us_poll_change(p, loop, LIBUS_SOCKET_READABLE | LIBUS_SOCKET_WRITABLE);
+        dispatch_release(p->gcd_read);
+        dispatch_release(p->gcd_write);
+    }
     free(p);
 }
 
@@ -171,7 +181,7 @@ struct us_poll_t *us_poll_resize(struct us_poll_t *p, struct us_loop_t *loop, un
     int events = us_poll_events(p);
 
     struct us_poll_t *new_p = realloc(p, sizeof(struct us_poll_t) + ext_size + 1024);
-    if (p != new_p) {
+    if (p != new_p && new_p->gcd_read) {
         /* It is a program error to release suspended filters */
         us_poll_change(new_p, loop, LIBUS_SOCKET_READABLE | LIBUS_SOCKET_WRITABLE);
         dispatch_release(new_p->gcd_read);
@@ -273,6 +283,13 @@ void us_internal_async_set(struct us_internal_async *a, void (*cb)(struct us_int
 void us_internal_async_wakeup(struct us_internal_async *a) {
     // will probably need to track in-flight work item and cancel in close
     dispatch_async_f(dispatch_get_main_queue(), a, async_handler);
+}
+
+/* The main queue runs forever, so asyncs need no ref'ing */
+void us_internal_async_ref(struct us_internal_async *a) {
+}
+
+void us_internal_async_unref(struct us_internal_async *a) {
 }
 
 #endif
