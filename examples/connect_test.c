@@ -525,11 +525,13 @@ static void run_step(struct us_timer_t *t) {
             dial("localhost", listen_port);
             dial("localhost", listen_port);
 
-            /* Tear everything down from inside the loop; the resolving sockets are cancelled by the
-             * context free and the loop exits once the closed sockets have been freed. The
-             * (fallthrough) timers are closed after the loop has exited, as closing a poll
-             * from inside the loop counts against its poll count. */
-            us_listen_socket_close(0, listen_socket);
+            /* Tear everything down from inside the loop; the resolving client sockets are cancelled
+             * by the client context free and the loop exits once the closed sockets have been freed.
+             * The server side may still hold sockets whose FIN from the previous step is yet to be
+             * processed, and a context must only be freed once its sockets are closed, so close
+             * them (and the listen socket) first. The (fallthrough) timers are closed after the
+             * loop has exited, as closing a poll from inside the loop counts against its poll count. */
+            us_socket_context_close(0, server_context);
             us_socket_context_free(SSL, client_context);
             us_socket_context_free(0, server_context);
             break;
