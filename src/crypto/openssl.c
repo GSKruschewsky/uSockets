@@ -183,7 +183,11 @@ struct us_internal_ssl_socket_t *us_internal_ssl_socket_close(struct us_internal
 struct us_internal_ssl_socket_t *ssl_on_close(struct us_internal_ssl_socket_t *s, int code, void *reason) {
     struct us_internal_ssl_socket_context_t *context = (struct us_internal_ssl_socket_context_t *) us_socket_context(0, &s->s);
 
-    SSL_free(s->ssl);
+    /* A connecting socket closed before on_open (e.g. while its name was being resolved) has no SSL object */
+    if (s->ssl) {
+        SSL_free(s->ssl);
+        s->ssl = NULL;
+    }
 
     return context->on_close(s, code, reason);
 }
@@ -659,6 +663,9 @@ struct us_internal_ssl_socket_context_t *us_internal_create_ssl_socket_context(s
     /* I guess this is the only optional callback */
     context->on_server_name = NULL;
 
+    /* Client side SNI, set with us_socket_context_set_host_name; none until then */
+    context->hostname = NULL;
+
     /* Then we extend its SSL parts */
     context->ssl_context = ssl_context;//create_ssl_context_from_options(options);
     context->is_parent = 1;
@@ -708,12 +715,23 @@ struct us_internal_ssl_socket_t *us_internal_ssl_adopt_accepted_socket(struct us
     return (struct us_internal_ssl_socket_t *) us_adopt_accepted_socket(0, &context->sc, accepted_fd, sizeof(struct us_internal_ssl_socket_t) - sizeof(struct us_socket_t) + socket_ext_size, addr_ip, addr_ip_length);
 }
 
+/* The SSL object is created in ssl_on_open; until then (name lookup, TCP connect) the socket must read as
+ * having none, so that closing, writing to or shutting down a not yet open socket is harmless */
+static struct us_internal_ssl_socket_t *us_internal_ssl_init_connecting_socket(struct us_internal_ssl_socket_t *s) {
+    if (s) {
+        s->ssl = NULL;
+        s->ssl_write_wants_read = 0;
+        s->ssl_read_wants_write = 0;
+    }
+    return s;
+}
+
 struct us_internal_ssl_socket_t *us_internal_ssl_socket_context_connect(struct us_internal_ssl_socket_context_t *context, const char *host, int port, const char *source_host, int options, int socket_ext_size) {
-    return (struct us_internal_ssl_socket_t *) us_socket_context_connect(0, &context->sc, host, port, source_host, options, sizeof(struct us_internal_ssl_socket_t) - sizeof(struct us_socket_t) + socket_ext_size);
+    return us_internal_ssl_init_connecting_socket((struct us_internal_ssl_socket_t *) us_socket_context_connect(0, &context->sc, host, port, source_host, options, sizeof(struct us_internal_ssl_socket_t) - sizeof(struct us_socket_t) + socket_ext_size));
 }
 
 struct us_internal_ssl_socket_t *us_internal_ssl_socket_context_connect_unix(struct us_internal_ssl_socket_context_t *context, const char *server_path, int options, int socket_ext_size) {
-    return (struct us_internal_ssl_socket_t *) us_socket_context_connect_unix(0, &context->sc, server_path, options, sizeof(struct us_internal_ssl_socket_t) - sizeof(struct us_socket_t) + socket_ext_size);
+    return us_internal_ssl_init_connecting_socket((struct us_internal_ssl_socket_t *) us_socket_context_connect_unix(0, &context->sc, server_path, options, sizeof(struct us_internal_ssl_socket_t) - sizeof(struct us_socket_t) + socket_ext_size));
 }
 
 void us_internal_ssl_socket_context_on_open(struct us_internal_ssl_socket_context_t *context, struct us_internal_ssl_socket_t *(*on_open)(struct us_internal_ssl_socket_t *s, int is_client, char *ip, int ip_length)) {
@@ -763,7 +781,8 @@ void *us_internal_ssl_socket_get_native_handle(struct us_internal_ssl_socket_t *
 }
 
 int us_internal_ssl_socket_write(struct us_internal_ssl_socket_t *s, const char *data, int length, int msg_more) {
-    if (us_socket_is_closed(0, &s->s) || us_internal_ssl_socket_is_shut_down(s)) {
+    /* Not open yet (no SSL object), closed or shut down: nothing can be written */
+    if (!s->ssl || us_socket_is_closed(0, &s->s) || us_internal_ssl_socket_is_shut_down(s)) {
         return 0;
     }
 
@@ -816,11 +835,12 @@ void *us_internal_ssl_socket_ext(struct us_internal_ssl_socket_t *s) {
 }
 
 int us_internal_ssl_socket_is_shut_down(struct us_internal_ssl_socket_t *s) {
-    return us_socket_is_shut_down(0, &s->s) || SSL_get_shutdown(s->ssl) & SSL_SENT_SHUTDOWN;
+    return us_socket_is_shut_down(0, &s->s) || (s->ssl && SSL_get_shutdown(s->ssl) & SSL_SENT_SHUTDOWN);
 }
 
 void us_internal_ssl_socket_shutdown(struct us_internal_ssl_socket_t *s) {
-    if (!us_socket_is_closed(0, &s->s) && !us_internal_ssl_socket_is_shut_down(s)) {
+    /* A socket that is not open yet has no TLS session to shut down; close it instead */
+    if (s->ssl && !us_socket_is_closed(0, &s->s) && !us_internal_ssl_socket_is_shut_down(s)) {
         struct us_internal_ssl_socket_context_t *context = (struct us_internal_ssl_socket_context_t *) us_socket_context(0, &s->s);
         struct us_loop_t *loop = us_socket_context_loop(0, &context->sc);
         struct loop_ssl_data *loop_ssl_data = (struct loop_ssl_data *) loop->data.ssl_data;

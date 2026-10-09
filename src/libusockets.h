@@ -184,7 +184,20 @@ void us_socket_context_on_timeout(int ssl, struct us_socket_context_t *context,
     struct us_socket_t *(*on_timeout)(struct us_socket_t *s));
 void us_socket_context_on_long_timeout(int ssl, struct us_socket_context_t *context,
     struct us_socket_t *(*on_timeout)(struct us_socket_t *s));
-/* This one is only used for when a connecting socket fails in a late stage. */
+/* on_connect_error codes at or below this value are failed name lookups: the code is
+ * LIBUS_CONNECT_ERROR_RESOLVE_BASE minus the absolute getaddrinfo error (EAI_*), kept apart from
+ * the socket error numbers which overlap with EAI_* values on some platforms */
+#define LIBUS_CONNECT_ERROR_RESOLVE_BASE (-100000)
+#define LIBUS_CONNECT_ERROR_IS_RESOLVE(code) ((code) <= LIBUS_CONNECT_ERROR_RESOLVE_BASE)
+#define LIBUS_CONNECT_ERROR_RESOLVE_CODE(code) (LIBUS_CONNECT_ERROR_RESOLVE_BASE - (code))
+
+/* This one is only used for when a connecting socket fails in a late stage: the connect was refused,
+ * unroutable or timed out (code is the socket error, e.g. ECONNREFUSED), or the host name could not be
+ * resolved (code is in the LIBUS_CONNECT_ERROR_RESOLVE_BASE range, see above). The socket is closed right
+ * after this returns, without on_close being emitted. Not emitted for sockets you cancel with
+ * us_socket_close_connecting. Register it on every context you connect from: an unresolvable name
+ * is reported here rather than by us_socket_context_connect returning null, and without a handler
+ * the socket is silently closed. */
 void us_socket_context_on_connect_error(int ssl, struct us_socket_context_t *context,
     struct us_socket_t *(*on_connect_error)(struct us_socket_t *s, int code));
 
@@ -211,7 +224,13 @@ void us_listen_socket_close(int ssl, struct us_listen_socket_t *ls);
 struct us_socket_t *us_adopt_accepted_socket(int ssl, struct us_socket_context_t *context, LIBUS_SOCKET_DESCRIPTOR client_fd,
     unsigned int socket_ext_size, char *addr_ip, int addr_ip_length);
 
-/* Land in on_open or on_connection_error or return null or return socket */
+/* Land in on_open or on_connection_error or return null or return socket.
+ * Never blocks the calling thread: a numeric host (e.g. "127.0.0.1" or "::1") connects right away, while a
+ * host name is resolved on a resolver thread and the connect is finished on the loop thread once the lookup
+ * completes (an unresolvable name lands in on_connect_error). Until then the returned socket has no file
+ * descriptor yet; it can be timed out (us_socket_timeout, covering the lookup as well) and cancelled
+ * (us_socket_close_connecting / us_socket_close) like any other connecting socket, while writes, shutdowns and
+ * address queries on it are no-ops. Null is only returned if the connect could not even be started. */
 struct us_socket_t *us_socket_context_connect(int ssl, struct us_socket_context_t *context,
     const char *host, int port, const char *source_host, int options, int socket_ext_size);
 

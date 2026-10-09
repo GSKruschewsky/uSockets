@@ -109,6 +109,19 @@ LIBUS_SOCKET_DESCRIPTOR bsd_create_listen_socket_unix(const char *path, int opti
 /* Creates an UDP socket bound to the hostname and port */
 LIBUS_SOCKET_DESCRIPTOR bsd_create_udp_socket(const char *host, int port);
 
+/* Client connects happen in two steps so that the (blocking) name lookup can run off the loop thread:
+ * resolve host:port (and optionally the source host) into addrinfo lists, then create the non-blocking
+ * socket from them. The resolve functions return 0 on success or the getaddrinfo error; with
+ * numeric_only set they never block (AI_NUMERICHOST) and fail for anything but a literal IP. */
+struct addrinfo;
+int bsd_resolve_connect_addr(const char *host, int port, int numeric_only, struct addrinfo **result);
+int bsd_resolve_source_addr(const char *source_host, int numeric_only, struct addrinfo **result);
+void bsd_free_addrinfo(struct addrinfo *result);
+/* Creates the socket, binds it to source_result if given and starts the non-blocking connect.
+ * On failure returns LIBUS_SOCKET_ERROR and stores the socket error in *error (if non-null) */
+LIBUS_SOCKET_DESCRIPTOR bsd_create_connect_socket_resolved(struct addrinfo *result, struct addrinfo *source_result, int options, int *error);
+
+/* Synchronous (blocking lookup) version of the above two steps */
 LIBUS_SOCKET_DESCRIPTOR bsd_create_connect_socket(const char *host, int port, const char *source_host, int options);
 
 LIBUS_SOCKET_DESCRIPTOR bsd_create_connect_socket_unix(const char *server_path, int options);

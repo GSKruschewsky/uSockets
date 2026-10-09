@@ -798,39 +798,98 @@ int bsd_udp_packet_buffer_ecn(void *msgvec, int index) {
     return 0; // no ecn defaults to 0
 }
 
-LIBUS_SOCKET_DESCRIPTOR bsd_create_connect_socket(const char *host, int port, const char *source_host, int options) {
-    struct addrinfo hints, *result;
+static int bsd_last_error() {
+#ifdef _WIN32
+    return WSAGetLastError();
+#else
+    return errno;
+#endif
+}
+
+int bsd_resolve_connect_addr(const char *host, int port, int numeric_only, struct addrinfo **result) {
+    struct addrinfo hints;
     memset(&hints, 0, sizeof(struct addrinfo));
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = numeric_only ? AI_NUMERICHOST : 0;
 
     char port_string[16];
     snprintf(port_string, 16, "%d", port);
 
-    if (getaddrinfo(host, port_string, &hints, &result) != 0) {
-        return LIBUS_SOCKET_ERROR;
-    }
+    *result = NULL;
+    return getaddrinfo(host, port_string, &hints, result);
+}
 
+int bsd_resolve_source_addr(const char *source_host, int numeric_only, struct addrinfo **result) {
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(struct addrinfo));
+    hints.ai_flags = numeric_only ? AI_NUMERICHOST : 0;
+
+    *result = NULL;
+    return getaddrinfo(source_host, NULL, numeric_only ? &hints : NULL, result);
+}
+
+void bsd_free_addrinfo(struct addrinfo *result) {
+    if (result) {
+        freeaddrinfo(result);
+    }
+}
+
+LIBUS_SOCKET_DESCRIPTOR bsd_create_connect_socket_resolved(struct addrinfo *result, struct addrinfo *source_result, int options, int *error) {
     LIBUS_SOCKET_DESCRIPTOR fd = bsd_create_socket(result->ai_family, result->ai_socktype, result->ai_protocol);
     if (fd == LIBUS_SOCKET_ERROR) {
-        freeaddrinfo(result);
+        if (error) {
+            *error = bsd_last_error();
+        }
         return LIBUS_SOCKET_ERROR;
     }
 
-    if (source_host) {
-        struct addrinfo *interface_result;
-        if (!getaddrinfo(source_host, NULL, NULL, &interface_result)) {
-            int ret = bind(fd, interface_result->ai_addr, (socklen_t) interface_result->ai_addrlen);
-            freeaddrinfo(interface_result);
-            if (ret == LIBUS_SOCKET_ERROR) {
-                bsd_close_socket(fd);
-                freeaddrinfo(result);
-                return LIBUS_SOCKET_ERROR;
+    if (source_result) {
+        if (bind(fd, source_result->ai_addr, (socklen_t) source_result->ai_addrlen) == LIBUS_SOCKET_ERROR) {
+            if (error) {
+                *error = bsd_last_error();
             }
+            bsd_close_socket(fd);
+            return LIBUS_SOCKET_ERROR;
         }
     }
 
-    connect(fd, result->ai_addr, (socklen_t) result->ai_addrlen);
+    /* Non-blocking: the usual outcome is EINPROGRESS and the poll reports the result later, but
+     * no route (ENETUNREACH, EHOSTUNREACH), EADDRNOTAVAIL or EACCES fail right here and such a
+     * socket would never become writable on every platform, so report those now */
+    if (connect(fd, result->ai_addr, (socklen_t) result->ai_addrlen) == LIBUS_SOCKET_ERROR) {
+        int connect_error = bsd_last_error();
+#ifdef _WIN32
+        if (connect_error != WSAEWOULDBLOCK) {
+#else
+        if (connect_error != EINPROGRESS && connect_error != EINTR) {
+#endif
+            if (error) {
+                *error = connect_error;
+            }
+            bsd_close_socket(fd);
+            return LIBUS_SOCKET_ERROR;
+        }
+    }
+
+    return fd;
+}
+
+LIBUS_SOCKET_DESCRIPTOR bsd_create_connect_socket(const char *host, int port, const char *source_host, int options) {
+    struct addrinfo *result;
+    if (bsd_resolve_connect_addr(host, port, 0, &result) != 0) {
+        return LIBUS_SOCKET_ERROR;
+    }
+
+    /* A source host that does not resolve is ignored, as it always was */
+    struct addrinfo *source_result = NULL;
+    if (source_host && bsd_resolve_source_addr(source_host, 0, &source_result) != 0) {
+        source_result = NULL;
+    }
+
+    LIBUS_SOCKET_DESCRIPTOR fd = bsd_create_connect_socket_resolved(result, source_result, options, NULL);
+
+    bsd_free_addrinfo(source_result);
     freeaddrinfo(result);
 
     return fd;

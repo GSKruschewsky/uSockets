@@ -14,5 +14,8 @@ In its minimal, TCP-only, configuration µSockets has no dependencies other than
 
 Here are some configurations; WITH_IO_URING, WITH_LIBUV, WITH_ASIO, WITH_GCD, WITH_ASAN, WITH_QUIC, WITH_BORINGSSL, WITH_OPENSSL, WITH_WOLFSSL.
 
+## Non-blocking client connects
+`us_socket_context_connect` never blocks the loop thread: numeric hosts connect right away, while host names are resolved on a short-lived resolver thread and the connect is finished on the loop thread once the lookup completes. The returned socket can be timed out or cancelled while the lookup is in flight, and an unresolvable name is reported through `on_connect_error`. The library therefore links against pthreads on POSIX (`make` adds `-pthread`); embedders linking `uSockets.a` on glibc older than 2.34 need `-pthread` too.
+
 ## Fast & stable
 µWebSockets itself is known to have run with outstanding performance and stability since 2016. This thanks to, among other factors, the speed and stability of µSockets. We fuzz and randomly "hammer test" the library as part of security & stability testing done in the µWebSockets project.
