@@ -81,3 +81,18 @@ jobs:
       run: WITH_ASAN=1 make examples
     - name: run test
       run: ./connect_test && ./hammer_test && ./hammer_test_unix
+    - name: run library tests
+      run: WITH_ASAN=1 make tests
+
+  test_linux_openssl:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: install openssl
+      run: sudo apt install -y libssl-dev
+    - name: build library and examples with OpenSSL
+      run: WITH_OPENSSL=1 WITH_ASAN=1 make examples
+    - name: run library tests with OpenSSL
+      run: WITH_OPENSSL=1 WITH_ASAN=1 make tests
