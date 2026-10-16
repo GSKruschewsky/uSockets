@@ -299,4 +299,14 @@ void *us_socket_context_ext(int ssl, struct us_socket_context_t *context) {
     return context + 1;
 }
 
+/* Receive timestamps are not implemented on the io_uring backend: the option is accepted and reads back as off */
+void us_socket_context_set_rx_timestamps(int ssl, struct us_socket_context_t *context, int enabled) {
+    (void) ssl; (void) context; (void) enabled;
+}
+
+int us_socket_context_rx_timestamps(int ssl, struct us_socket_context_t *context) {
+    (void) ssl; (void) context;
+    return 0;
+}
+
 #endif
