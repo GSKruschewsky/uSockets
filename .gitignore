@@ -1,0 +1,19 @@
+# build outputs of make / make examples / make tests
+*.o
+*.a
+*.exe
+.certs/
+/connect_test
+/echo_server
+/hammer_test
+/hammer_test_unix
+/http3_client
+/http3_server
+/http_load_test
+/http_server
+/peer_verify_test
+/tcp_load_test
+/tcp_server
+/udp_benchmark
+/swift_http_server
+/recv_buffer_test

@@ -429,4 +429,33 @@ unsigned long long us_realtime_ns() {
     return bsd_realtime_ns();
 }
 
+char *us_loop_recv_buffer(struct us_loop_t *loop, int which, unsigned int *length) {
+    if (which == 0) {
+        *length = LIBUS_RECV_BUFFER_LENGTH + LIBUS_RECV_BUFFER_PADDING * 2;
+        return loop->data.recv_buf;
+    }
+#ifndef LIBUS_NO_SSL
+    if (which == 1) {
+        return us_internal_ssl_loop_read_buffer(loop, length);
+    }
+#endif
+    *length = 0;
+    return 0;
+}
+
+int us_loop_recv_buffer_of(struct us_loop_t *loop, const char *data, unsigned int length, unsigned int *offset) {
+    for (int which = 0; which < 2; which++) {
+        unsigned int buf_length;
+        char *buf = us_loop_recv_buffer(loop, which, &buf_length);
+        /* Compared as integers: the chunk may come from another allocation (reassembly, inflate),
+         * and ordering pointers into unrelated objects is undefined in C */
+        uintptr_t lo = (uintptr_t) buf, hi = lo + buf_length, at = (uintptr_t) data;
+        if (buf && at >= lo && at + length <= hi) {
+            *offset = (unsigned int) (at - lo);
+            return which;
+        }
+    }
+    return -1;
+}
+
 #endif

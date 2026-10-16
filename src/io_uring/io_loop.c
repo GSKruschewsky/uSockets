@@ -419,4 +419,30 @@ void *us_loop_ext(struct us_loop_t *loop) {
     return loop + 1;
 }
 
+/* The fork's loop accessors (receive timestamps, receive-buffer views) are not implemented on the
+ * io_uring backend; these keep the link whole and report "no stamp" / "no buffer". */
+#include <time.h>
+unsigned long long us_loop_last_rx_timestamp(struct us_loop_t *loop, int *from_kernel) {
+    (void) loop;
+    if (from_kernel) *from_kernel = 0;
+    return 0;
+}
+
+unsigned long long us_realtime_ns() {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (unsigned long long) ts.tv_sec * 1000000000ull + (unsigned long long) ts.tv_nsec;
+}
+
+char *us_loop_recv_buffer(struct us_loop_t *loop, int which, unsigned int *length) {
+    (void) loop; (void) which;
+    *length = 0;
+    return 0;
+}
+
+int us_loop_recv_buffer_of(struct us_loop_t *loop, const char *data, unsigned int length, unsigned int *offset) {
+    (void) loop; (void) data; (void) length; (void) offset;
+    return -1;
+}
+
 #endif

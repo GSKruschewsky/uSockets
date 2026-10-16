@@ -111,6 +111,12 @@ boringssl:
 examples: default
 	for f in examples/*.c; do $(CC) -O3 $(CFLAGS) -o $$(basename "$$f" ".c")$(EXEC_SUFFIX) "$$f" $(LDFLAGS); done
 
+# Builds and runs the library tests against uSockets.a
+.PHONY: tests
+tests: default
+	$(CC) -O3 $(CFLAGS) -o recv_buffer_test$(EXEC_SUFFIX) tests/recv_buffer_test.c $(LDFLAGS)
+	./recv_buffer_test$(EXEC_SUFFIX)
+
 swift_examples:
 	swiftc -O -I . examples/swift_http_server/main.swift uSockets.a -o swift_http_server
 
