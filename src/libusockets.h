@@ -282,7 +282,10 @@ unsigned long long us_realtime_ns();
 /* The loop's receive buffers: 0 = the plain-socket read buffer, 1 = the TLS plaintext buffer (NULL
  * until the first TLS context exists). Every on_data chunk, and so every message dispatched from it,
  * lives inside one of them unless it was reassembled or inflated elsewhere. Lets an embedder keep one
- * persistent view per buffer instead of wrapping every message. */
+ * persistent view per buffer instead of wrapping every message. The bytes of a chunk are valid only
+ * while the on_data callback that delivered it runs: the next read into the buffer overwrites them,
+ * so a view handed out from here shares that lifetime and whoever keeps a message past the callback
+ * must copy it. */
 char *us_loop_recv_buffer(struct us_loop_t *loop, int which, unsigned int *length);
 
 /* Which receive buffer [data, data + length) lies in (0 or 1, with *offset set to the byte offset
