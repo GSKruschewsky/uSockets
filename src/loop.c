@@ -18,6 +18,7 @@
 #ifndef LIBUS_USE_IO_URING
 
 #include "libusockets.h"
+#include <stdint.h>
 #include "internal/internal.h"
 #include <stdlib.h>
 
@@ -447,8 +448,11 @@ int us_loop_recv_buffer_of(struct us_loop_t *loop, const char *data, unsigned in
     for (int which = 0; which < 2; which++) {
         unsigned int buf_length;
         char *buf = us_loop_recv_buffer(loop, which, &buf_length);
-        if (buf && data >= buf && data + length <= buf + buf_length) {
-            *offset = (unsigned int) (data - buf);
+        /* Compared as integers: the chunk may come from another allocation (reassembly, inflate),
+         * and ordering pointers into unrelated objects is undefined in C */
+        uintptr_t lo = (uintptr_t) buf, hi = lo + buf_length, at = (uintptr_t) data;
+        if (buf && at >= lo && at + length <= hi) {
+            *offset = (unsigned int) (at - lo);
             return which;
         }
     }
