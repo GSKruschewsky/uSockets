@@ -884,8 +884,6 @@ struct us_internal_ssl_socket_t *us_internal_ssl_socket_context_adopt_socket(str
     return (struct us_internal_ssl_socket_t *) us_socket_context_adopt_socket(0, &context->sc, &s->s, sizeof(struct us_internal_ssl_socket_t) - sizeof(struct us_socket_t) + ext_size);
 }
 
-#endif
-
 /* The plaintext buffer SSL_read decrypts into (NULL until the first TLS context created it) */
 char *us_internal_ssl_loop_read_buffer(struct us_loop_t *loop, unsigned int *length) {
     struct loop_ssl_data *loop_ssl_data = (struct loop_ssl_data *) loop->data.ssl_data;
@@ -896,3 +894,5 @@ char *us_internal_ssl_loop_read_buffer(struct us_loop_t *loop, unsigned int *len
     *length = LIBUS_RECV_BUFFER_LENGTH + LIBUS_RECV_BUFFER_PADDING * 2;
     return loop_ssl_data->ssl_read_output;
 }
+
+#endif
