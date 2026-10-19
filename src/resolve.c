@@ -169,10 +169,12 @@ static unsigned __stdcall us_internal_resolve_thread_entry(void *arg) {
     return 0;
 }
 
+/* Returns 0 or the positive error that stopped the thread from starting */
 static int us_internal_resolve_spawn(struct us_internal_resolve_request_t *r) {
     uintptr_t handle = _beginthreadex(NULL, 0, us_internal_resolve_thread_entry, r, 0, NULL);
     if (!handle) {
-        return -1;
+        /* _beginthreadex reports through errno (EAGAIN, EINVAL, EACCES) */
+        return errno ? errno : EAGAIN;
     }
     CloseHandle((HANDLE) handle);
     return 0;
@@ -183,14 +185,16 @@ static void *us_internal_resolve_thread_entry(void *arg) {
     return NULL;
 }
 
+/* Returns 0 or the positive error that stopped the thread from starting */
 static int us_internal_resolve_spawn(struct us_internal_resolve_request_t *r) {
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     pthread_t thread;
+    /* pthread_create returns the error (EAGAIN, EPERM ...) rather than setting errno */
     int ret = pthread_create(&thread, &attr, us_internal_resolve_thread_entry, r);
     pthread_attr_destroy(&attr);
-    return ret ? -1 : 0;
+    return ret ? ret : 0;
 }
 #endif
 
@@ -338,6 +342,8 @@ static void us_internal_resolve_cancel_request(struct us_loop_t *loop, struct us
     }
 }
 
+/* Returns 0 once the lookup is queued or running, else the positive error (errno value) that
+ * kept it from starting: out of memory, or the resolver thread could not be created */
 int us_internal_resolve_connect(struct us_socket_t *s, const char *host, int port, const char *source_host, int options) {
     struct us_loop_t *loop = s->context->loop;
 
@@ -345,14 +351,14 @@ int us_internal_resolve_connect(struct us_socket_t *s, const char *host, int por
     if (!loop->data.resolve_async) {
         loop->data.resolve_async = us_internal_create_async(loop, 1, 0);
         if (!loop->data.resolve_async) {
-            return -1;
+            return ENOMEM;
         }
         us_internal_async_set(loop->data.resolve_async, (void (*)(struct us_internal_async *)) us_internal_resolve_async_cb);
     }
 
     struct us_internal_resolve_request_t *r = malloc(sizeof(struct us_internal_resolve_request_t));
     if (!r) {
-        return -1;
+        return ENOMEM;
     }
 
     r->socket = s;
@@ -372,7 +378,7 @@ int us_internal_resolve_connect(struct us_socket_t *s, const char *host, int por
 
     if ((host && !r->host) || (source_host && !r->source_host)) {
         us_internal_resolve_free_request(r);
-        return -1;
+        return ENOMEM;
     }
 
     us_internal_resolve_link(loop, r);
@@ -380,10 +386,11 @@ int us_internal_resolve_connect(struct us_socket_t *s, const char *host, int por
     /* Start it now if a thread is available, otherwise it waits for one to finish */
     if (loop->data.resolve_running < LIBUS_MAX_RESOLVER_THREADS) {
         r->spawned = 1;
-        if (us_internal_resolve_spawn(r)) {
+        int spawn_error = us_internal_resolve_spawn(r);
+        if (spawn_error) {
             us_internal_resolve_unlink(loop, r);
             us_internal_resolve_free_request(r);
-            return -1;
+            return spawn_error;
         }
         loop->data.resolve_running++;
     }

@@ -230,9 +230,17 @@ struct us_socket_t *us_adopt_accepted_socket(int ssl, struct us_socket_context_t
  * completes (an unresolvable name lands in on_connect_error). Until then the returned socket has no file
  * descriptor yet; it can be timed out (us_socket_timeout, covering the lookup as well) and cancelled
  * (us_socket_close_connecting / us_socket_close) like any other connecting socket, while writes, shutdowns and
- * address queries on it are no-ops. Null is only returned if the connect could not even be started. */
+ * address queries on it are no-ops. Null is only returned if the connect could not even be started;
+ * us_socket_context_last_connect_error then tells why. */
 struct us_socket_t *us_socket_context_connect(int ssl, struct us_socket_context_t *context,
     const char *host, int port, const char *source_host, int options, int socket_ext_size);
+
+/* The error that made the last us_socket_context_connect / us_socket_context_connect_unix on this context
+ * return null: the platform socket error (errno / WSAGetLastError, e.g. EADDRNOTAVAIL from binding the source
+ * host) of a numeric host whose socket, bind or connect failed at once, or ENOMEM / the pthread_create error
+ * when the resolver thread for a host name could not be started. 0 after a connect that was started. Set by
+ * the library itself, so it is reliable where errno is not (the library may have made other calls since). */
+int us_socket_context_last_connect_error(int ssl, struct us_socket_context_t *context);
 
 struct us_socket_t *us_socket_context_connect_unix(int ssl, struct us_socket_context_t *context,
     const char *server_path, int options, int socket_ext_size);

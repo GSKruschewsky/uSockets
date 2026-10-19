@@ -116,6 +116,8 @@ examples: default
 tests: default
 	$(CC) -O3 $(CFLAGS) -o recv_buffer_test$(EXEC_SUFFIX) tests/recv_buffer_test.c $(LDFLAGS)
 	./recv_buffer_test$(EXEC_SUFFIX)
+	$(CC) -O3 $(CFLAGS) -o connect_error_test$(EXEC_SUFFIX) tests/connect_error_test.c $(LDFLAGS)
+	./connect_error_test$(EXEC_SUFFIX)
 
 swift_examples:
 	swiftc -O -I . examples/swift_http_server/main.swift uSockets.a -o swift_http_server

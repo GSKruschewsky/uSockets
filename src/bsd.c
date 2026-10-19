@@ -798,6 +798,13 @@ int bsd_udp_packet_buffer_ecn(void *msgvec, int index) {
     return 0; // no ecn defaults to 0
 }
 
+static int bsd_last_error();
+
+/* The calling thread's last socket error (errno / WSAGetLastError), for callers outside this file */
+int bsd_platform_error() {
+    return bsd_last_error();
+}
+
 static int bsd_last_error() {
 #ifdef _WIN32
     return WSAGetLastError();

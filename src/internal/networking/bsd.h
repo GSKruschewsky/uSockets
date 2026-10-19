@@ -70,6 +70,7 @@ LIBUS_SOCKET_DESCRIPTOR bsd_set_nonblocking(LIBUS_SOCKET_DESCRIPTOR fd);
 void bsd_socket_nodelay(LIBUS_SOCKET_DESCRIPTOR fd, int enabled);
 void bsd_socket_flush(LIBUS_SOCKET_DESCRIPTOR fd);
 int bsd_socket_error(LIBUS_SOCKET_DESCRIPTOR fd);
+int bsd_platform_error();
 LIBUS_SOCKET_DESCRIPTOR bsd_create_socket(int domain, int type, int protocol);
 
 void bsd_close_socket(LIBUS_SOCKET_DESCRIPTOR fd);
