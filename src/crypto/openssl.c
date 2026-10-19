@@ -780,6 +780,14 @@ void *us_internal_ssl_socket_get_native_handle(struct us_internal_ssl_socket_t *
     return s->ssl;
 }
 
+/* Per-socket client SNI, overriding the context's name for this socket. Must be called before
+ * the TLS handshake starts, i.e. from on_open before the first write; NULL sends no name. */
+void us_internal_ssl_socket_set_host_name(struct us_internal_ssl_socket_t *s, const char *hostname) {
+    if (s->ssl) {
+        SSL_set_tlsext_host_name(s->ssl, hostname);
+    }
+}
+
 int us_internal_ssl_socket_write(struct us_internal_ssl_socket_t *s, const char *data, int length, int msg_more) {
     /* Not open yet (no SSL object), closed or shut down: nothing can be written */
     if (!s->ssl || us_socket_is_closed(0, &s->s) || us_internal_ssl_socket_is_shut_down(s)) {

@@ -347,6 +347,12 @@ struct us_poll_t *us_poll_resize(struct us_poll_t *p, struct us_loop_t *loop, un
  * In the case of file descriptor, the value of pointer is fd. */
 void *us_socket_get_native_handle(int ssl, struct us_socket_t *s);
 
+/* Client-side TLS SNI for this one socket, overriding the name set on its context with
+ * us_socket_context_set_host_name. Only meaningful on an SSL client socket and only before its
+ * TLS handshake has started: call it from on_open before the first write. NULL sends no name
+ * (what an address literal needs). Does nothing on a non-SSL socket. */
+void us_socket_set_host_name(int ssl, struct us_socket_t *s, const char *hostname);
+
 /* Write up to length bytes of data. Returns actual bytes written.
  * Will call the on_writable callback of active socket context on failure to write everything off in one go.
  * Set hint msg_more if you have more immediate data to write. */

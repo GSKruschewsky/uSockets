@@ -184,6 +184,7 @@ void *us_internal_ssl_socket_context_find_server_name_userdata(struct us_interna
 void us_internal_ssl_socket_context_set_host_name(struct us_internal_ssl_socket_context_t *context, const char *hostname);
 
 void *us_internal_ssl_socket_get_native_handle(struct us_internal_ssl_socket_t *s);
+void us_internal_ssl_socket_set_host_name(struct us_internal_ssl_socket_t *s, const char *hostname);
 void *us_internal_ssl_socket_context_get_native_handle(struct us_internal_ssl_socket_context_t *context);
 
 struct us_internal_ssl_socket_context_t *us_internal_create_ssl_socket_context(struct us_loop_t *loop,

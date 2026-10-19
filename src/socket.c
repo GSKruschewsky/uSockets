@@ -167,6 +167,14 @@ void *us_socket_get_native_handle(int ssl, struct us_socket_t *s) {
     return (void *) (uintptr_t) us_poll_fd((struct us_poll_t *) s);
 }
 
+void us_socket_set_host_name(int ssl, struct us_socket_t *s, const char *hostname) {
+#ifndef LIBUS_NO_SSL
+    if (ssl) {
+        us_internal_ssl_socket_set_host_name((struct us_internal_ssl_socket_t *) s, hostname);
+    }
+#endif
+}
+
 /* This is not available for SSL sockets as it makes no sense. */
 int us_socket_write2(int ssl, struct us_socket_t *s, const char *header, int header_length, const char *payload, int payload_length) {
 
