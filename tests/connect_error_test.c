@@ -32,13 +32,15 @@ static void loop_noop(struct us_loop_t *loop) {
     (void) loop;
 }
 
-static void check_context(int ssl, struct us_socket_context_t *context) {
+/* 'port' is a listening local port, so a numeric connect to it always starts (a closed port
+ * can be refused synchronously on some platforms) */
+static void check_context(int ssl, struct us_socket_context_t *context, int port) {
     /* Fresh context: nothing failed yet */
     assert(us_socket_context_last_connect_error(ssl, context) == 0);
 
     /* A numeric host with a source address nobody here owns fails in bind(), synchronously */
     errno = 0;
-    struct us_socket_t *s = us_socket_context_connect(ssl, context, "127.0.0.1", 9, "192.0.2.1", 0, 0);
+    struct us_socket_t *s = us_socket_context_connect(ssl, context, "127.0.0.1", port, "192.0.2.1", 0, 0);
     assert(s == 0);
     assert(us_socket_context_last_connect_error(ssl, context) == BIND_ERROR);
 
@@ -47,13 +49,13 @@ static void check_context(int ssl, struct us_socket_context_t *context) {
     assert(us_socket_context_last_connect_error(ssl, context) == BIND_ERROR);
 
     /* A started attempt (numeric host, result arrives later in the loop) clears it */
-    s = us_socket_context_connect(ssl, context, "127.0.0.1", 9, 0, 0, 0);
+    s = us_socket_context_connect(ssl, context, "127.0.0.1", port, 0, 0, 0);
     assert(s != 0);
     assert(us_socket_context_last_connect_error(ssl, context) == 0);
     us_socket_close_connecting(ssl, s);
 
     /* And a failure after that is reported again */
-    s = us_socket_context_connect(ssl, context, "127.0.0.1", 9, "192.0.2.1", 0, 0);
+    s = us_socket_context_connect(ssl, context, "127.0.0.1", port, "192.0.2.1", 0, 0);
     assert(s == 0);
     assert(us_socket_context_last_connect_error(ssl, context) == BIND_ERROR);
 }
@@ -66,15 +68,28 @@ int main() {
 
     struct us_socket_context_t *context = us_create_socket_context(0, loop, 0, options);
     assert(context);
-    check_context(0, context);
-    drain(loop);
-    us_socket_context_free(0, context);
+
+    /* Something to connect to: the kernel completes a loopback connect to a listening port */
+    struct us_listen_socket_t *listener = us_socket_context_listen(0, context, "127.0.0.1", 0, 0, 0);
+    assert(listener);
+    int port = us_socket_local_port(0, (struct us_socket_t *) listener);
+    assert(port > 0);
+
+    check_context(0, context, port);
 
 #ifndef LIBUS_NO_SSL
     struct us_socket_context_t *ssl_context = us_create_socket_context(1, loop, 0, options);
     if (ssl_context) {
-        check_context(1, ssl_context);
-        drain(loop);
+        check_context(1, ssl_context, port);
+    }
+#endif
+
+    /* Let the loop free the cancelled sockets, then tear everything down */
+    us_listen_socket_close(0, listener);
+    drain(loop);
+    us_socket_context_free(0, context);
+#ifndef LIBUS_NO_SSL
+    if (ssl_context) {
         us_socket_context_free(1, ssl_context);
     }
 #endif
