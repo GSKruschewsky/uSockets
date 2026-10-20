@@ -158,6 +158,10 @@ struct us_socket_context_t {
 
     /* Opt-in: sockets connected through this context get kernel receive timestamps */
     int rx_timestamps;
+
+    /* Why the last us_socket_context_connect on this context returned null (0 after one that
+     * started), read back with us_socket_context_last_connect_error */
+    int last_connect_error;
 };
 
 #endif
@@ -180,6 +184,7 @@ void *us_internal_ssl_socket_context_find_server_name_userdata(struct us_interna
 void us_internal_ssl_socket_context_set_host_name(struct us_internal_ssl_socket_context_t *context, const char *hostname);
 
 void *us_internal_ssl_socket_get_native_handle(struct us_internal_ssl_socket_t *s);
+void us_internal_ssl_socket_set_host_name(struct us_internal_ssl_socket_t *s, const char *hostname);
 void *us_internal_ssl_socket_context_get_native_handle(struct us_internal_ssl_socket_context_t *context);
 
 struct us_internal_ssl_socket_context_t *us_internal_create_ssl_socket_context(struct us_loop_t *loop,

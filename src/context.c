@@ -240,6 +240,7 @@ struct us_socket_context_t *us_create_socket_context(int ssl, struct us_loop_t *
     /* Only set by contexts that connect; a connect failure must not call through garbage */
     context->on_connect_error = 0;
     context->rx_timestamps = 0;
+    context->last_connect_error = 0;
 
     us_internal_loop_link(loop, context);
 
@@ -385,6 +386,10 @@ struct us_socket_t *us_socket_context_connect(int ssl, struct us_socket_context_
     }
 #endif
 
+    /* An attempt that could not be started leaves its reason here for the caller; a started
+     * one clears it */
+    context->last_connect_error = 0;
+
     /* Fast path: a numeric host (and a numeric or absent source host) needs no lookup, so we
      * connect synchronously right here, exactly as before */
     struct addrinfo *result = NULL, *source_result = NULL;
@@ -392,11 +397,13 @@ struct us_socket_t *us_socket_context_connect(int ssl, struct us_socket_context_
     int source_is_numeric = !source_host || bsd_resolve_source_addr(source_host, 1, &source_result) == 0;
 
     if (host_is_numeric && source_is_numeric) {
-        LIBUS_SOCKET_DESCRIPTOR connect_socket_fd = bsd_create_connect_socket_resolved(result, source_result, options, NULL);
+        int error = 0;
+        LIBUS_SOCKET_DESCRIPTOR connect_socket_fd = bsd_create_connect_socket_resolved(result, source_result, options, &error);
         bsd_free_addrinfo(source_result);
         bsd_free_addrinfo(result);
 
         if (connect_socket_fd == LIBUS_SOCKET_ERROR) {
+            context->last_connect_error = error;
             return 0;
         }
 
@@ -417,14 +424,21 @@ struct us_socket_t *us_socket_context_connect(int ssl, struct us_socket_context_
      * on the loop thread when the lookup completes and lands in on_open or on_connect_error. */
     struct us_socket_t *connect_socket = us_internal_create_connect_socket(context, LIBUS_SOCKET_ERROR, socket_ext_size);
 
-    if (us_internal_resolve_connect(connect_socket, host, port, source_host, options)) {
+    int resolve_error = us_internal_resolve_connect(connect_socket, host, port, source_host, options);
+    if (resolve_error) {
         /* Could not even start the lookup (out of memory or threads) */
         us_internal_socket_context_unlink_socket(context, connect_socket);
         us_poll_free((struct us_poll_t *) connect_socket, context->loop);
+        context->last_connect_error = resolve_error;
         return 0;
     }
 
     return connect_socket;
+}
+
+int us_socket_context_last_connect_error(int ssl, struct us_socket_context_t *context) {
+    /* The SSL context embeds the plain one at its start, so one field serves both */
+    return context->last_connect_error;
 }
 
 struct us_socket_t *us_socket_context_connect_unix(int ssl, struct us_socket_context_t *context, const char *server_path, int options, int socket_ext_size) {
@@ -434,8 +448,10 @@ struct us_socket_t *us_socket_context_connect_unix(int ssl, struct us_socket_con
     }
 #endif
 
+    context->last_connect_error = 0;
     LIBUS_SOCKET_DESCRIPTOR connect_socket_fd = bsd_create_connect_socket_unix(server_path, options);
     if (connect_socket_fd == LIBUS_SOCKET_ERROR) {
+        context->last_connect_error = bsd_platform_error();
         return 0;
     }
 

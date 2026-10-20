@@ -17,3 +17,4 @@
 /udp_benchmark
 /swift_http_server
 /recv_buffer_test
+/connect_error_test
